@@ -1,0 +1,1049 @@
+---
+/** Landing page shell. Runtime is src/lib/deck-app.ts. */
+---
+
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TweetDeck for HN, prompt-routed by Gemini Nano</title>
+    <meta
+      name="description"
+      content="Define HN columns in plain English. Gemini Nano routes stories on-device; your column definitions never leave your browser."
+    />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=26" />
+    <link rel="alternate icon" href="/favicon.ico?v=26" />
+  </head>
+
+  <body data-app-ready="false">
+    <div id="boot-loading" class="boot-loading" role="status" aria-live="polite">
+      <div class="boot-loading__mark">HN</div>
+      <div>
+        <div class="boot-loading__title">Loading HNDeck</div>
+        <div class="boot-loading__detail">Reading your OPFS layout…</div>
+      </div>
+    </div>
+
+    <header class="topbar">
+      <div class="topbar__brand">
+        <img class="topbar__logo" src="/favicon.svg?v=26" alt="HNDeck" />
+        <div>
+          <a class="topbar__title-link" href="/" aria-label="Home">
+            <h1 class="topbar__title">TweetDeck for HN, prompt-routed by Gemini Nano</h1>
+          </a>
+          <p class="topbar__subtitle">
+            Define columns in plain English. Nano routes stories into them, on-device, free, offline. Your column definitions never leave your browser.
+          </p>
+        </div>
+      </div>
+      <div class="topbar__actions">
+        <button id="reload-every-btn" class="topbar__btn" type="button">
+          <span aria-hidden="true">↻</span>
+          <span>Reload every 1m</span>
+        </button>
+        <button id="add-column-btn" class="topbar__btn" type="button">
+          <span aria-hidden="true">＋</span>
+          <span>Column</span>
+        </button>
+        <button id="editor-btn" class="topbar__btn topbar__btn--primary" type="button" aria-haspopup="dialog">
+          <span aria-hidden="true">⚙</span>
+          <span>Customize</span>
+        </button>
+        <button id="about-btn" class="topbar__btn" type="button" aria-haspopup="dialog">
+          <span aria-hidden="true">ℹ</span>
+          <span>Why this exists</span>
+        </button>
+      </div>
+    </header>
+
+    <main class="main">
+      <!-- ─── Status banner ─────────────────────────────────────── -->
+      <div id="status" class="status" data-kind="info" hidden></div>
+
+      <!-- ─── Inline setup banner ───────────────────────────────────
+           Only shown when Nano isn't ready: either it needs to be
+           downloaded (Begin button), is currently downloading
+           (progress bar), or the browser/device doesn't support it
+           (setup-guide steps). When Nano is already on disk this
+           stays hidden and the reader goes straight to composing. -->
+      <section id="setup-banner" class="setup-banner" hidden>
+        <div class="setup-banner__icon" aria-hidden="true">⚙️</div>
+        <div class="setup-banner__main">
+          <h3 id="setup-title" class="setup-banner__title"></h3>
+          <p id="setup-detail" class="setup-banner__detail"></p>
+
+          <div id="setup-bar" class="setup-banner__bar" hidden>
+            <div id="setup-fill" class="setup-banner__fill"></div>
+          </div>
+          <p id="setup-pct" class="setup-banner__pct" hidden>0%</p>
+
+          <ol id="setup-steps" class="setup-banner__steps" hidden></ol>
+          <a id="setup-verify" class="setup-banner__verify" href="#" hidden>Open verify link →</a>
+
+          <div class="setup-banner__actions">
+            <button id="setup-begin" class="setup-banner__btn setup-banner__btn--primary" type="button" hidden>
+              Enable Nano (download model)
+            </button>
+            <button id="setup-retry" class="setup-banner__btn" type="button" hidden>
+              Try again
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ─── TweetDeck-style column deck ───────────────────────── -->
+      <section id="deck" class="deck" aria-label="Hacker News columns"></section>
+    </main>
+
+    <footer class="footer">
+      <span>Built with the Chrome Prompt API · Astro · Cloudflare Workers</span>
+      <span>·</span>
+      <a class="footer__link" href="https://news.ycombinator.com/" target="_blank" rel="noopener">
+        Plain Hacker News ↗
+      </a>
+    </footer>
+
+    <!-- ─── About / "Why this exists" dialog ──────────────────────────
+         Opens from the topbar button. Holds the thesis hed, the
+         today-vs-agentic diagram, and the longer "why I built this"
+         text. Uses the native <dialog> element so ESC + backdrop
+         dismiss come for free. -->
+    <dialog id="about-dialog" class="about-dialog">
+      <article class="about-dialog__panel">
+        <header class="about-dialog__header">
+          <h2 class="about-dialog__hed">
+            Define columns in plain English. Nano routes stories into them, on-device, free, offline. Your column definitions never leave your browser.
+          </h2>
+          <button
+            id="about-close"
+            class="about-dialog__close"
+            type="button"
+            aria-label="Close"
+          >×</button>
+        </header>
+
+        <div class="thesis-diagram" aria-label="Today vs. agentic era">
+          <div class="thesis-diagram__panel">
+            <div class="thesis-diagram__label">Today</div>
+            <div class="thesis-diagram__step">news.ycombinator.com</div>
+            <div class="thesis-diagram__arrow" aria-hidden="true">↓</div>
+            <div class="thesis-diagram__step">30 raw stories</div>
+            <div class="thesis-diagram__arrow" aria-hidden="true">↓</div>
+            <div class="thesis-diagram__step">You scan, decide what to click</div>
+            <div class="thesis-diagram__arrow" aria-hidden="true">↓</div>
+            <div class="thesis-diagram__step thesis-diagram__step--you">You read</div>
+          </div>
+
+          <div class="thesis-diagram__panel">
+            <div class="thesis-diagram__label thesis-diagram__label--accent">Agentic era</div>
+            <div class="thesis-diagram__step">news.ycombinator.com</div>
+            <div class="thesis-diagram__arrow" aria-hidden="true">↓</div>
+            <div class="thesis-diagram__step thesis-diagram__step--agent">
+              <span class="thesis-diagram__step-main">Your agent</span>
+              <span class="thesis-diagram__step-sub">Nano + your private context</span>
+            </div>
+            <div class="thesis-diagram__arrow" aria-hidden="true">↓</div>
+            <div class="thesis-diagram__step thesis-diagram__step--out">Personalized briefing</div>
+            <div class="thesis-diagram__arrow" aria-hidden="true">↓</div>
+            <div class="thesis-diagram__step thesis-diagram__step--you">You read</div>
+          </div>
+        </div>
+
+        <p class="about-dialog__caption">
+          Same source on both sides. On the right, a small on-device model
+          re-shapes it into a view that's actually for you. Your context
+          never leaves the device. The original source is one tap away.
+        </p>
+
+        <div class="about-dialog__body">
+          <p>
+            <strong>Gemini Nano</strong> is the on-device language model
+            Chrome ships in your browser. The reception has been chilly —
+            the dev forums have a steady drumbeat of <em>"it can barely
+            follow instructions,"</em> <em>"why does this exist,"</em>
+            <em>"I'd rather just call gpt-4o-mini."</em> That criticism is
+            mostly fair.
+          </p>
+          <p>
+            I have a working <strong>prompt → Excalidraw</strong> demo
+            built on bigger cloud-hosted models — the pattern handles code
+            generation and structured output reliably. I wired Nano up to
+            the same pattern and it fell over. Two reasons, both legitimate:
+            the model itself is much smaller, and Chrome's Prompt API
+            <strong>doesn't expose grammar-constrained decoding</strong>,
+            so there's no rail keeping the model on-spec. When Nano
+            hallucinates a missing quote or bracket, the whole call
+            collapses. Worse model and weaker decoder — fewer guard-rails
+            on both axes.
+          </p>
+          <p>
+            <strong>But Nano is already here.</strong> It's installed in
+            your browser. It runs free, runs offline, doesn't leak your
+            prompts to anyone's server. So the question stopped being
+            "what would I use a real model for" and started being: what is
+            a small model in your browser <em>uniquely</em> good at?
+          </p>
+          <p>
+            This page is my attempt at an answer. Not "Nano generates the
+            world" — that's the failure mode. Instead:
+            <strong>Nano reads a small batch of items and writes you a
+            short, personalized note about them.</strong> A small job for
+            a small model. And it happens to be a preview of how every
+            webpage will look in the agentic era.
+          </p>
+          <p class="about-dialog__caveat">
+            This is a demo, not a product. Expect rough edges. The model
+            is small; it sometimes misranks, sometimes hallucinates an
+            item id (caught and dropped), sometimes the prose is generic.
+            That's the point. We're not pretending Nano is GPT-4 — we're
+            showing what a Nano-sized agent can usefully do on a webpage
+            today, with the model that already lives in your browser.
+          </p>
+        </div>
+      </article>
+    </dialog>
+
+    <!-- ─── Customize dialog ──────────────────────────────────────────
+         Holds the reader-context textarea and the today's-directive
+         input. Opened from the topbar Customize button.
+         The inputs are auto-saved to OPFS on every keystroke,
+         so there's no explicit "save"
+         action — closing the dialog is enough. -->
+    <dialog id="editor-dialog" class="about-dialog">
+      <article class="about-dialog__panel">
+        <header class="about-dialog__header">
+          <h2 class="about-dialog__hed">Customize</h2>
+          <button
+            id="editor-close"
+            class="about-dialog__close"
+            type="button"
+            aria-label="Close"
+          >×</button>
+        </header>
+
+        <p class="about-dialog__caption">
+          Customize HNDeck here, or open the <strong>browser dev console</strong>
+          and edit the page directly. DOM and CSS edits are saved to OPFS as
+          a page snapshot. On reload, HNDeck restores that snapshot, then
+          rerenders app-owned regions like deck columns, column order,
+          prompts, and live story cards. To restore defaults, run
+          <code>await hnDeck.resetLayout()</code> in the console or use
+          Reset layout below.
+        </p>
+
+        <div class="editor-form">
+          <label class="editor-form__label" for="reader-context">
+            <span>Tell your editor about you</span>
+            <span class="editor-form__hint">
+              Be specific. The more your editor knows that you'd never
+              paste into ChatGPT, the more useful it is.
+            </span>
+          </label>
+          <textarea
+            id="reader-context"
+            class="editor-form__textarea"
+            rows="8"
+            placeholder="e.g. backend engineer, learning Rust, exploring distributed systems and CRDTs, skip crypto and LLM-benchmark posts, surface Postgres-internals deep dives. I'm prepping for system-design interviews so infra deep-dives are gold."
+            disabled
+          ></textarea>
+
+          <label class="editor-form__label" for="session-prompt">
+            <span>Today's directive</span>
+            <span class="editor-form__hint">
+              Optional. One-off note for the next briefing only.
+            </span>
+          </label>
+          <input
+            id="session-prompt"
+            class="editor-form__input"
+            type="text"
+            placeholder="e.g. lean tools-heavy today; skip the drama"
+            disabled
+          />
+        </div>
+
+        <div class="editor-form__footer">
+          <button id="reset-state" class="editor-form__btn editor-form__btn--danger" type="button">
+            Reset layout
+          </button>
+          <button id="editor-done" class="editor-form__btn editor-form__btn--primary" type="button">
+            Done
+          </button>
+        </div>
+      </article>
+    </dialog>
+
+    <!-- ─── Per-column settings dialog ─────────────────────────────── -->
+    <dialog id="column-dialog" class="about-dialog">
+      <article class="about-dialog__panel">
+        <header class="about-dialog__header">
+          <h2 class="about-dialog__hed">Column settings</h2>
+          <button
+            id="column-close"
+            class="about-dialog__close"
+            type="button"
+            aria-label="Close"
+          >×</button>
+        </header>
+
+        <p class="about-dialog__caption">
+          Every column has a title and a predicate. Built-in predicates
+          mirror Hacker News views. Custom predicates are prompts Nano
+          uses to decide which stories belong in that column.
+        </p>
+
+        <div class="editor-form">
+          <label class="editor-form__label" for="column-title">
+            <span>Title</span>
+          </label>
+          <input
+            id="column-title"
+            class="editor-form__input"
+            type="text"
+            placeholder="e.g. Tools, AI, Funny"
+          />
+
+          <label class="editor-form__label" for="column-kind">
+            <span>Predicate / source</span>
+          </label>
+          <select id="column-kind" class="editor-form__input">
+            <option value="top">Top</option>
+            <option value="new">New</option>
+            <option value="ask">Ask</option>
+            <option value="show">Show</option>
+            <option value="user">User submissions</option>
+            <option value="best-month">Best stories this month</option>
+            <option value="custom">Custom Nano prompt</option>
+          </select>
+
+          <label class="editor-form__label" for="column-predicate">
+            <span>Prompt / predicate</span>
+            <span class="editor-form__hint">
+              Custom: Nano routing prompt. User: HN username. Best month: YYYY-MM (blank = current month).
+            </span>
+          </label>
+          <textarea
+            id="column-predicate"
+            class="editor-form__textarea"
+            rows="5"
+            placeholder="Funny, pg, 2026-05, or a custom routing prompt"
+          ></textarea>
+        </div>
+
+        <div class="editor-form__footer">
+          <button id="column-cancel" class="editor-form__btn" type="button">Cancel</button>
+          <button id="column-save" class="editor-form__btn editor-form__btn--primary" type="button">
+            Save column
+          </button>
+        </div>
+      </article>
+    </dialog>
+
+    <script>
+      // Astro processes this script at build time: TypeScript, ESM imports,
+      // bundling. The actual app lives in src/lib/deck-app.ts.
+      import { startDeckApp } from "../lib/deck-app";
+
+      const safeStart = async () => {
+        try {
+          await startDeckApp();
+        } catch (err) {
+          // Surface any sync throw visibly instead of failing silently.
+          console.error("[startDeckApp] threw:", err);
+          const banner = document.createElement("div");
+          banner.style.cssText =
+            "position:fixed;top:0;left:0;right:0;background:#ea4335;color:#fff;padding:12px;font:14px monospace;z-index:99999;white-space:pre-wrap;";
+          banner.textContent =
+            "[startDeckApp] " +
+            (err instanceof Error ? err.stack || err.message : String(err));
+          document.body.appendChild(banner);
+        }
+      };
+      if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", safeStart, { once: true });
+      } else {
+        safeStart();
+      }
+    </script>
+
+    <style id="hn-deck-app-css" is:global>
+      /* ─── Palette + type system ─────────────────────────────────
+         Hacker News' own identity: #f6f6ef cream, #ff6600 orange,
+         #828282 grey metadata, near-black text. Newspaper serif sits
+         on top of HN's colors so the page looks like HN's evening
+         edition rather than a separate tech app. */
+      /* Broadsheet palette: warm cream paper, near-black ink, grey
+         metadata, orange used SPARINGLY as accent — never as a wall.
+         The orange is a thin reference stripe and the link colour,
+         not the dominant chrome. The point is to present HN like a
+         hand-set printed paper, not to clone HN's UI. */
+      :root {
+        --bg:      #f6f4ec;     /* warm cream paper */
+        --bg-2:    #fffdf6;     /* slightly brighter "front page" panel */
+        --bg-3:    #fbf9f1;     /* faint off-cream */
+        --bg-tint: rgba(255, 102, 0, 0.08);
+        --fg:      #1c1813;     /* warm near-black ink */
+        --fg-mid:  #4a4034;
+        --fg-dim:  #7a6e5c;     /* warm grey byline */
+        --orange:  #ff6600;     /* sparing accent only */
+        --orange-dim: #cc5200;
+        --border:  #d3cdb8;     /* soft warm beige rule */
+        --rule:    #5a4f3b;     /* heavier rule for masthead dividers */
+        --green:   #1b5e20;
+        --red:     #a01927;
+        --font-sans: -apple-system, BlinkMacSystemFont, "Inter",
+          "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        --font-serif: "Source Serif 4", "Iowan Old Style", "Charter",
+          Georgia, "Times New Roman", serif;
+        --font-display: "Playfair Display", "Iowan Old Style",
+          Georgia, "Times New Roman", serif;
+        --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      }
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0; padding: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font-family: var(--font-serif);
+        font-size: 16.5px;
+        line-height: 1.6;
+        /* Subtle newsprint grain — darker dots on cream, since the
+           page is now light. */
+        background-image:
+          radial-gradient(rgba(0, 0, 0, 0.025) 1px, transparent 1px);
+        background-size: 3px 3px;
+      }
+      code, pre { font-family: var(--font-mono); }
+      a { color: var(--orange); text-decoration-thickness: 1px; }
+      a:hover { text-decoration: underline; }
+      strong { color: var(--fg); }
+      em { font-style: italic; color: var(--fg-mid); }
+
+      .boot-loading {
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 16px;
+        background: var(--bg);
+        color: var(--fg);
+        transition: opacity 0.18s ease;
+      }
+      body[data-app-ready="true"] .boot-loading {
+        opacity: 0;
+        pointer-events: none;
+      }
+      .boot-loading__mark {
+        width: 44px;
+        height: 44px;
+        border-radius: 50%;
+        display: grid;
+        place-items: center;
+        background: var(--orange);
+        color: #fff;
+        font-family: var(--font-sans);
+        font-weight: 800;
+        letter-spacing: -0.08em;
+      }
+      .boot-loading__title {
+        font-family: var(--font-display);
+        font-size: 20px;
+        font-weight: 800;
+        line-height: 1.1;
+      }
+      .boot-loading__detail {
+        font-family: var(--font-serif);
+        font-size: 13px;
+        font-style: italic;
+        color: var(--fg-dim);
+      }
+
+      /* ─── Masthead (broadsheet banner) ───────────────────────
+         A thin orange reference stripe across the top (the only
+         direct nod to HN), then a cream/paper masthead with a big
+         serif clickable title, italic byline-style subtitle, and a
+         double-rule below — like a printed-paper front page. */
+      .topbar {
+        position: relative;
+        display: flex; justify-content: space-between; align-items: center;
+        padding: 26px 32px 20px;
+        background: var(--bg-2);
+        border-bottom: 3px double var(--rule);
+        gap: 18px; flex-wrap: wrap;
+      }
+      .topbar::before {
+        content: "";
+        position: absolute; top: 0; left: 0; right: 0; height: 4px;
+        background: var(--orange);
+      }
+      .topbar__brand { display: flex; gap: 16px; align-items: flex-start; }
+      .topbar__logo {
+        width: 38px;
+        height: 38px;
+        margin-top: 3px;
+        flex-shrink: 0;
+      }
+      .topbar__title-link {
+        text-decoration: none;
+        color: inherit;
+        display: inline-block;
+      }
+      .topbar__title-link:hover .topbar__title {
+        color: var(--orange);
+      }
+      .topbar__title {
+        margin: 0;
+        font-family: var(--font-display);
+        font-size: clamp(22px, 2.4vw, 30px);
+        font-weight: 800;
+        line-height: 1.1;
+        letter-spacing: -0.5px;
+        color: var(--fg);
+        transition: color 0.15s;
+      }
+      .topbar__subtitle {
+        margin: 6px 0 0;
+        font-family: var(--font-serif);
+        font-style: italic;
+        font-size: 14px; color: var(--fg-dim);
+      }
+      .topbar__actions {
+        display: flex; gap: 10px; flex-wrap: wrap; align-items: center;
+      }
+      .topbar__btn {
+        display: inline-flex; gap: 6px; align-items: center;
+        background: #fff7ea;
+        color: #1c1813;
+        border: 1px solid #8f7f65; border-radius: 999px;
+        padding: 8px 16px;
+        font-family: var(--font-sans);
+        font-size: 13px; font-weight: 600;
+        cursor: pointer;
+        transition: background 0.15s, color 0.15s, border-color 0.15s;
+      }
+      .topbar__btn:hover {
+        background: #fff0d6; color: var(--orange);
+        border-color: var(--orange);
+      }
+      .topbar__btn--primary {
+        background: var(--fg); color: var(--bg-2);
+        border-color: var(--fg);
+      }
+      .topbar__btn--primary:hover {
+        background: var(--orange); color: #fff; border-color: var(--orange);
+      }
+
+      /* ─── Main column ───────────────────────────────────────── */
+      .main {
+        width: 100%;
+        max-width: none;
+        margin: 0;
+        padding: 24px 16px 48px;
+      }
+
+      /* ─── Thesis diagram (used inside the About dialog) ────── */
+      .thesis-diagram {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 18px;
+        margin: 8px 0 16px;
+      }
+      @media (max-width: 640px) {
+        .thesis-diagram { grid-template-columns: 1fr; }
+      }
+      .thesis-diagram__panel {
+        display: flex; flex-direction: column; align-items: stretch; gap: 8px;
+        background: var(--bg); border: 1px solid var(--border);
+        border-radius: 10px; padding: 14px 14px 18px;
+      }
+      .thesis-diagram__label {
+        font-size: 11px; font-weight: 700; letter-spacing: 0.9px;
+        text-transform: uppercase; color: var(--fg-dim);
+        text-align: center; margin-bottom: 6px;
+      }
+      .thesis-diagram__label--accent { color: var(--orange); }
+      .thesis-diagram__step {
+        background: var(--bg-2); border: 1px solid var(--border);
+        border-radius: 8px; padding: 10px 12px;
+        font-size: 13px; line-height: 1.4; color: var(--fg);
+        text-align: center;
+      }
+      .thesis-diagram__step--agent {
+        display: flex; flex-direction: column; align-items: center; gap: 2px;
+        border-color: var(--orange-dim);
+        background: rgba(246, 130, 31, 0.08);
+      }
+      .thesis-diagram__step-main { font-weight: 600; }
+      .thesis-diagram__step-sub {
+        font-size: 11px; color: var(--fg-dim);
+      }
+      .thesis-diagram__step--out {
+        border-color: var(--orange);
+        background: rgba(246, 130, 31, 0.14);
+        font-weight: 500;
+      }
+      .thesis-diagram__step--you {
+        background: var(--bg-3); border-color: var(--border);
+        font-weight: 600;
+      }
+      .thesis-diagram__arrow {
+        text-align: center; font-size: 14px; line-height: 1;
+        color: var(--fg-dim);
+      }
+
+      /* ─── About dialog ──────────────────────────────────────── */
+      .about-dialog {
+        border: none; padding: 0; background: transparent;
+        max-width: 720px; width: 92%; max-height: 90vh;
+        color: var(--fg);
+      }
+      .about-dialog::backdrop {
+        background: rgba(0, 0, 0, 0.78); backdrop-filter: blur(6px);
+      }
+      .about-dialog__panel {
+        background: var(--bg-2); border: 1px solid var(--border);
+        border-radius: 14px; padding: 24px 28px;
+        max-height: 90vh; overflow: auto;
+        box-shadow: 0 18px 56px rgba(0, 0, 0, 0.55);
+      }
+      .about-dialog__header {
+        display: flex; align-items: flex-start; justify-content: space-between;
+        gap: 16px; margin-bottom: 12px;
+      }
+      .about-dialog__hed {
+        margin: 0; font-size: clamp(20px, 2.5vw, 26px); line-height: 1.2;
+        font-weight: 700; letter-spacing: -0.3px;
+      }
+      .about-dialog__close {
+        background: var(--bg); color: var(--fg); border: 1px solid var(--border);
+        width: 32px; height: 32px; line-height: 1; font-size: 18px;
+        border-radius: 50%; cursor: pointer; flex-shrink: 0;
+      }
+      .about-dialog__close:hover {
+        border-color: var(--orange); color: var(--orange);
+      }
+      .about-dialog__caption {
+        margin: 4px 0 16px;
+        font-size: 13.5px; line-height: 1.55; color: var(--fg-mid);
+      }
+      .about-dialog__caption strong {
+        color: var(--fg);
+        font-weight: 700;
+      }
+      .about-dialog__caption code {
+        color: var(--fg);
+        background: rgba(255, 102, 0, 0.14);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 1px 5px;
+        white-space: nowrap;
+      }
+      .about-dialog__body p {
+        margin: 0 0 12px;
+        color: var(--fg-mid); font-size: 14.5px; line-height: 1.6;
+      }
+      .about-dialog__caveat {
+        font-size: 12.5px !important;
+        color: var(--fg-dim) !important;
+        border-left: 3px solid var(--bg-3);
+        padding-left: 12px;
+        margin-top: 14px !important;
+      }
+
+      /* ─── Status banner ─────────────────────────────────────── */
+      .status {
+        font-family: var(--font-sans);
+        font-size: 12.5px; color: var(--fg-dim);
+        padding: 9px 14px;
+        border: 1px solid var(--border);
+        background: var(--bg-2);
+        border-radius: 4px;
+        margin-bottom: 18px;
+        letter-spacing: 0.2px;
+      }
+      .status[data-kind="warn"]  { color: #fbbc04; border-color: #fbbc0455; }
+      .status[data-kind="error"] { color: var(--red); border-color: #ea433555; }
+
+      /* ─── TweetDeck-style deck ──────────────────────────────── */
+      .deck {
+        display: flex;
+        align-items: stretch;
+        gap: 14px;
+        width: 100%;
+        overflow-x: auto;
+        padding: 4px 0 18px;
+        scroll-snap-type: x proximity;
+      }
+      .deck-column {
+        flex: 0 0 clamp(320px, 26vw, 420px);
+        height: calc(100vh - 245px);
+        min-height: 560px;
+        display: flex;
+        flex-direction: column;
+        background: var(--bg-2);
+        border: 1px solid var(--border);
+        border-top: 3px solid var(--orange);
+        border-radius: 6px;
+        scroll-snap-align: start;
+      }
+      .deck:not(.deck--overflowing):not(.deck--focused) .deck-column:last-child {
+        flex-grow: 1;
+      }
+      .deck-column--routing {
+        box-shadow: inset 0 0 0 2px rgba(255, 102, 0, 0.18);
+      }
+      .deck--focused .deck-column--dimmed {
+        display: none;
+      }
+      .deck-column--focused {
+        flex: 1 1 100%;
+        max-width: none;
+        z-index: 2;
+      }
+      .deck-column--focused .deck-column__btn--edit {
+        display: none;
+      }
+      .deck-column__header {
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 0;
+        padding: 14px 14px 12px;
+        border-bottom: 1px solid var(--border);
+        background: var(--bg-3);
+      }
+      .deck-column__title {
+        margin: 0;
+        font-family: var(--font-display);
+        font-size: 20px;
+        line-height: 1.15;
+        color: var(--fg);
+      }
+      .deck-column__actions {
+        display: flex;
+        gap: 4px;
+        justify-content: flex-end;
+        align-items: center;
+        margin-top: 10px;
+        padding-top: 8px;
+        border-top: 1px solid var(--border);
+      }
+      .deck-column__btn {
+        width: 28px;
+        height: 28px;
+        border-radius: 6px;
+        border: 1px solid var(--border);
+        background: var(--bg-2);
+        color: var(--fg);
+        cursor: pointer;
+        font-family: var(--font-sans);
+        font-size: 12px;
+      }
+      .deck-column__btn--wide {
+        width: auto;
+        min-width: 104px;
+        padding: 0 10px;
+        font-weight: 600;
+      }
+      .deck-column__btn:hover {
+        border-color: var(--orange);
+        color: var(--orange);
+      }
+      .deck-column__top-status {
+        padding: 7px 14px;
+        border-bottom: 1px solid var(--border);
+        background: var(--bg-tint);
+        color: var(--fg-dim);
+        font-family: var(--font-sans);
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.7px;
+      }
+      .deck-column__top-status[hidden] { display: none; }
+      .deck-column__body {
+        flex: 1;
+        overflow-y: auto;
+        padding: 14px;
+      }
+      .deck-column__sentinel {
+        padding: 10px 14px;
+        border-top: 1px solid var(--border);
+        color: var(--fg-dim);
+        font-family: var(--font-sans);
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.7px;
+      }
+      .deck-spinner {
+        display: inline-block;
+        width: 11px;
+        height: 11px;
+        margin-right: 6px;
+        border: 2px solid rgba(255, 102, 0, 0.25);
+        border-top-color: var(--orange);
+        border-radius: 50%;
+        vertical-align: -2px;
+        animation: deck-spin 0.8s linear infinite;
+      }
+      @keyframes deck-spin {
+        to { transform: rotate(360deg); }
+      }
+      .deck-empty,
+      .deck-note {
+        margin: 0 0 14px;
+        padding: 12px;
+        background: var(--bg-tint);
+        border-left: 3px solid var(--orange);
+        color: var(--fg-mid);
+        font-size: 13.5px;
+        line-height: 1.45;
+      }
+      .deck-card {
+        position: relative;
+        break-inside: avoid;
+        padding: 0 0 14px 38px;
+        margin: 0 0 14px;
+        border-bottom: 1px solid var(--border);
+      }
+      .deck-card--fresh {
+        animation: deck-card-fresh-bg 2.4s ease-out;
+      }
+      @keyframes deck-card-fresh-bg {
+        0%   { background-color: rgba(255, 102, 0, 0.22); }
+        55%  { background-color: rgba(255, 102, 0, 0.10); }
+        100% { background-color: transparent; }
+      }
+      .deck-card__title {
+        margin: 0 0 4px;
+        font-family: var(--font-display);
+        font-size: 17px;
+        line-height: 1.22;
+        color: var(--fg);
+      }
+      .deck-card__vote {
+        position: absolute;
+        top: -3px;
+        left: 0;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 28px;
+        height: 28px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: var(--bg-2);
+        color: var(--fg-dim);
+        text-decoration: none;
+        font-family: var(--font-sans);
+        font-size: 15px;
+        font-weight: 700;
+        line-height: 1;
+        transition: background 0.15s, color 0.15s, border-color 0.15s;
+      }
+      .deck-card__vote:hover {
+        background: var(--orange);
+        border-color: var(--orange);
+        color: #fff;
+      }
+      .deck-card__title-row {
+        display: grid;
+        grid-template-columns: 18px 1fr;
+        gap: 8px;
+        align-items: start;
+      }
+      .deck-card__favicon {
+        width: 16px;
+        height: 16px;
+        margin-top: 2px;
+        border-radius: 3px;
+        background: var(--bg-3);
+        object-fit: contain;
+      }
+      .deck-card__title-link {
+        color: inherit;
+        text-decoration: none;
+      }
+      .deck-card__title-link:hover {
+        color: var(--orange);
+        text-decoration: underline;
+        text-decoration-thickness: 1px;
+      }
+      .deck-card__meta {
+        margin: 0 0 8px;
+        color: var(--fg-dim);
+        font-size: 12.5px;
+        font-style: italic;
+        line-height: 1.35;
+      }
+      .deck-card__meta a {
+        color: inherit;
+        text-decoration: none;
+        border-bottom: 1px dotted transparent;
+      }
+      .deck-card__meta a:hover {
+        color: var(--orange);
+        border-bottom-color: var(--orange);
+      }
+      .deck-card__time {
+        appearance: none;
+        border: 0;
+        background: transparent;
+        color: inherit;
+        font: inherit;
+        font-style: italic;
+        padding: 0;
+        cursor: pointer;
+        border-bottom: 1px dotted transparent;
+      }
+      .deck-card__time:hover {
+        color: var(--orange);
+        border-bottom-color: var(--orange);
+      }
+      .deck-card__body {
+        margin: 0 0 8px;
+        color: var(--fg-mid);
+        font-size: 13.5px;
+        line-height: 1.48;
+      }
+      /* ─── Editor form (inside the Edit-your-editor dialog) ──── */
+      .editor-form {
+        display: flex; flex-direction: column; gap: 6px;
+        margin-top: 8px;
+      }
+      .editor-form__label {
+        display: flex; flex-direction: column; gap: 2px;
+        margin: 10px 0 4px; font-size: 13px; font-weight: 600;
+      }
+      .editor-form__hint {
+        font-weight: 400; font-size: 12px; color: var(--fg-dim);
+      }
+      .editor-form__textarea,
+      .editor-form__input {
+        width: 100%;
+        background: var(--bg);
+        color: var(--fg);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 10px 12px;
+        font-size: 14px;
+        font-family: inherit;
+        line-height: 1.5;
+        resize: vertical;
+      }
+      .editor-form__textarea:focus,
+      .editor-form__input:focus {
+        outline: none; border-color: var(--orange);
+      }
+      .editor-form__textarea:disabled,
+      .editor-form__input:disabled {
+        opacity: 0.55; cursor: not-allowed;
+      }
+      .editor-form__footer {
+        display: flex; justify-content: flex-end; margin-top: 16px;
+      }
+      .editor-form__btn {
+        background: var(--bg); color: var(--fg);
+        border: 1px solid var(--border); border-radius: 8px;
+        padding: 9px 20px; font-size: 14px; font-weight: 500;
+        font-family: inherit; cursor: pointer;
+      }
+      .editor-form__btn:hover { border-color: var(--orange); }
+      .editor-form__btn--primary {
+        background: var(--orange); color: #000; border-color: var(--orange);
+        font-weight: 700;
+      }
+      .editor-form__btn--primary:hover {
+        background: #ff9a47; border-color: #ff9a47;
+      }
+
+      /* ─── Footer ────────────────────────────────────────────── */
+      .footer {
+        display: flex; gap: 10px; flex-wrap: wrap; justify-content: center;
+        padding: 18px 24px;
+        font-size: 12px; color: var(--fg-dim);
+        border-top: 1px solid var(--border);
+        background: var(--bg-2);
+      }
+      .footer__link { color: var(--fg-dim); text-decoration: none; }
+      .footer__link:hover { color: var(--orange); }
+
+      /* ─── Inline setup banner ──────────────────────────────────
+         Shown only when Nano isn't ready. Sits in the page flow above
+         the controls; doesn't gate the whole layout the way a modal
+         would. Orange-tinted left border draws the eye without
+         hijacking the screen. */
+      .setup-banner {
+        display: flex;
+        gap: 14px;
+        padding: 16px 18px;
+        margin-bottom: 24px;
+        background: rgba(246, 130, 31, 0.06);
+        border: 1px solid var(--orange-dim);
+        border-left: 4px solid var(--orange);
+        border-radius: 10px;
+      }
+      .setup-banner[hidden] { display: none; }
+      .setup-banner__icon {
+        font-size: 22px; flex-shrink: 0; line-height: 1.4;
+      }
+      .setup-banner__main { flex: 1; min-width: 0; }
+      .setup-banner__title {
+        margin: 0 0 4px; font-size: 15px; font-weight: 600; color: var(--fg);
+      }
+      .setup-banner__detail {
+        margin: 0 0 10px; font-size: 13.5px; line-height: 1.55; color: var(--fg-dim);
+      }
+      .setup-banner__bar {
+        height: 6px; background: var(--bg); border-radius: 999px;
+        overflow: hidden; margin: 10px 0 6px;
+      }
+      .setup-banner__fill {
+        height: 100%; width: 0%;
+        background: linear-gradient(90deg, var(--orange-dim), var(--orange));
+        transition: width 0.3s ease-out;
+      }
+      .setup-banner__pct {
+        margin: 0 0 10px; font-size: 12px; color: var(--fg-dim);
+        font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      }
+      .setup-banner__steps {
+        margin: 8px 0; padding-left: 20px;
+        font-size: 13px; line-height: 1.6; color: var(--fg);
+      }
+      .setup-banner__steps li { margin-bottom: 4px; }
+      .setup-banner__steps code {
+        background: var(--bg); padding: 1px 6px; border-radius: 3px;
+        font-size: 12px; color: var(--orange); word-break: break-all;
+      }
+      .setup-banner__steps a { color: var(--orange); text-decoration: none; }
+      .setup-banner__steps a:hover { text-decoration: underline; }
+      .setup-banner__steps b { color: var(--fg); }
+      .setup-banner__verify {
+        display: inline-block; margin: 4px 0 8px;
+        font-size: 12px; color: var(--orange); text-decoration: none;
+      }
+      .setup-banner__verify:hover { text-decoration: underline; }
+      .setup-banner__actions {
+        display: flex; gap: 10px; flex-wrap: wrap; margin-top: 8px;
+      }
+      .setup-banner__btn {
+        background: var(--bg); color: var(--fg);
+        border: 1px solid var(--border);
+        padding: 8px 16px; border-radius: 8px;
+        font-size: 13.5px; cursor: pointer;
+        transition: border-color 0.15s, background 0.15s;
+      }
+      .setup-banner__btn:hover { border-color: var(--orange); }
+      .setup-banner__btn--primary {
+        background: var(--orange); color: #000; border-color: var(--orange);
+        font-weight: 600;
+      }
+      .setup-banner__btn--primary:hover {
+        background: #ff9a47; border-color: #ff9a47;
+      }
+    </style>
+  </body>
+</html>

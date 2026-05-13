@@ -1,0 +1,46 @@
+# Copy to `.dev.vars` and fill in to enable in `astro dev` / `astro preview`.
+# These are loaded by Wrangler's local dev (workerd) automatically.
+#
+# For production, use `wrangler secret put OT_TOKEN` (don't commit secrets).
+
+# Origin Trial token for the Prompt API "sampling parameters" trial.
+# Get one at https://developer.chrome.com/origintrials/ → register your
+# origin → "Prompt API sampling parameters". Empty/absent is fine; the
+# demo just falls back to Chrome's default temperature/topK.
+OT_TOKEN=
+
+# Optional MapTiler key for prettier vector tiles. Leave empty to fall
+# back to demotiles.maplibre.org (basic globe style, no key needed).
+# Get one at https://maptiler.com (free tier: 100k loads/mo).
+MAPTILER_KEY=
+
+# Optional Mapillary client token for street-level photo lookups
+# (tour.gallery() with the "street" source). Leave empty to disable
+# the feature — the model's prompt won't mention "street" if missing.
+# Get one at https://www.mapillary.com/dashboard/developers (free).
+MAPILLARY_KEY=
+
+# Optional override for the base map style URL. Leave empty to use
+# MAPTILER_KEY (if set) or CartoCDN Voyager (free, no key, default).
+#
+# Free no-key alternatives:
+#   https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json   (default)
+#   https://basemaps.cartocdn.com/gl/positron-gl-style/style.json
+#   https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json
+#   https://tiles.openfreemap.org/styles/bright
+#   https://tiles.openfreemap.org/styles/liberty
+#   https://tiles.openfreemap.org/styles/positron
+#   https://tiles.openfreemap.org/styles/dark
+#
+# With key:
+#   https://api.maptiler.com/maps/streets-v2/style.json?key=YOUR_KEY
+#
+MAP_STYLE=
+
+# Optional override for the EdgeSharp optimizer base URL. The browser does
+# not call this directly; /api/image resolves a source image and redirects
+# through `${EDGESHARP_URL}/_next/image?...`. Default:
+#   https://edgesharp.teamchong.net
+# If EdgeSharp rejects remote URLs, update EdgeSharp ALLOWED_ORIGINS to include:
+#   https://upload.wikimedia.org,https://server.arcgisonline.com,https://graph.mapillary.com
+EDGESHARP_URL=
