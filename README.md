@@ -1,126 +1,75 @@
-# promptapi — On-Device Tour Guide
+# HNDeck
 
-Click a city. Chrome's on-device Gemini Nano writes a walking tour using a
-4-line TypeScript SDK. The SDK validates the model's calls and renders
-them on a MapLibre map. **No server. No API keys. No textbox.**
+TweetDeck for Hacker News, routed by Chrome's on-device Gemini Nano.
 
-```
-[city button]  ──▶  Nano (in browser)  ──▶  tour.goto("eiffel-tower", "...")
-                                              │
-                                              ▼
-                                    SDK validates + executes
-                                              │
-                                              ▼
-                                  pin + popup + route line
-                                       streams onto map
-```
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/teamchong/hndeck)
 
-This is a **Code Mode** demo, in the same family as
-[`drawmode`](../drawmode), [`gomode`](../gomode), [`pymode`](../pymode), and
-[`querymode`](../querymode) — a tiny TypeScript SDK is exposed to the LLM,
-the LLM emits a few SDK calls, and the runtime turns them into something
-the user sees. The novelty here: the model is **Gemini Nano running on
-the user's device**, not a cloud API.
+## What It Is
 
-## What's interesting
+- Define Hacker News columns in plain English.
+- Raw columns use HN feeds like Top, New, Ask, Show, user submissions, or best stories this month.
+- Raw/source columns can also have a local text filter.
+- Custom columns use Gemini Nano in Chrome to route stories locally on your device.
+- Stories can appear in multiple columns.
+- Columns refresh independently and default to reloading every minute.
+- Your routing instructions, layout, and customization stay in your browser.
 
-- **Closed-enum location keys.** The SDK's `goto(loc, msg)` parameter is
-  typed as a string union of pre-baked landmark names (e.g. `"eiffel-tower"`,
-  `"cloudflare-london"`, `"big-ben"`). The model can't hallucinate a place
-  name and can't emit raw coordinates. Every key has hardcoded `[lng, lat]`
-  in `src/lib/locations.ts` so we **never need geocoding**.
-- **Per-city enum narrowing.** When the user picks Tokyo, the system prompt
-  only shows ~6 valid Tokyo locations. Nano never sees Paris landmarks
-  in a Tokyo tour.
-- **Streaming partial executor.** As tokens arrive from `promptStreaming()`,
-  a regex peels off complete `tour.goto(...)` calls and executes them
-  immediately. Pins drop on the map *while* the model is still typing.
-- **Cloudflare offices baked in.** Every supported city has its local
-  Cloudflare office in the enum, so tours naturally end at "the Cloudflare
-  Lisbon office".
+## Why
 
-## Browser requirements
+Chrome may already have Gemini Nano on disk. HNDeck tries to make that useful: local AI reads small HN batches, applies your preferences, and presents the stories in columns you actually want to scan.
 
-- Chrome 138+ on a desktop OS (macOS 13+, Windows 10/11, Linux,
-  Chromebook Plus).
-- Gemini Nano downloaded on-device. Visit `chrome://on-device-internals`
-  to verify; the model is downloaded automatically on first use.
-- 22 GB free disk on the Chrome profile volume (per Chrome's docs).
+## Customization
 
-If the API isn't available, the page shows a status banner explaining
-why; nothing else breaks.
+HNDeck is intentionally editable from DevTools.
 
-## Local development
+- Edit DOM or CSS directly in the browser.
+- HNDeck saves a page snapshot to OPFS.
+- On reload, it restores your snapshot, then rerenders app-owned regions like deck columns, column order, routing instructions, and live story cards.
+- Reset with `await hnDeck.resetLayout()` or the Customize dialog's Reset layout button.
+
+## Browser Requirements
+
+- Chrome 138+ on desktop.
+- Gemini Nano / Prompt API available in that Chrome profile.
+- Enough free disk for Chrome's one-time on-device model download.
+- If Nano is not available, HNDeck still shows raw HN columns and displays setup guidance.
+
+Useful Chrome pages:
+
+- `chrome://on-device-internals`
+- `chrome://flags/#optimization-guide-on-device-model`
+- `chrome://flags/#prompt-api-for-gemini-nano`
+- `chrome://flags/#internal-debugging-page-urls` if internal debug URLs are hidden
+
+## Local Development
 
 ```bash
 pnpm install
-pnpm dev               # http://localhost:4321 — Astro 6 + workerd
-pnpm check             # astro check (TS errors)
-pnpm build             # output to ./dist
-pnpm preview           # local preview using workerd
+pnpm dev      # http://localhost:4330
+pnpm check
+pnpm build
+pnpm preview
 ```
 
-Optional environment (in `.dev.vars` for local, `wrangler secret put` for
-production):
+## Deploy
 
-```bash
-# Origin Trial token for the Prompt API "sampling parameters" trial.
-# Unlocks `temperature` and `topK` on the open web. Empty is fine.
-OT_TOKEN=
-
-# Optional MapTiler key for prettier vector tiles. Leave empty to fall
-# back to the free `demotiles.maplibre.org` style.
-MAPTILER_KEY=
-```
-
-Get an OT token at <https://developer.chrome.com/origintrials/> →
-"Prompt API sampling parameters" → register your origin.
-
-## Deploying to Cloudflare Workers
+Use the deploy button above, or deploy manually:
 
 ```bash
 pnpm deploy
 ```
 
-That runs `astro build && wrangler deploy`. The Astro adapter generates
-the worker bundle at `dist/server/` and wires up the static assets at
-`dist/client/`. The default worker name is `promptapi` — change it in
-`wrangler.jsonc` before deploying.
+That runs `astro build && wrangler deploy`. The Worker name is `hndeck` in `wrangler.jsonc`.
 
-## File map
+## How Nano Routing Works
 
-```
-src/
-├── pages/
-│   └── index.astro            ← page shell, OT meta tag, layout, styles
-├── lib/
-│   ├── locations.ts           ← static city + landmark dictionary
-│   ├── prompt.ts              ← system-prompt builder (per-city enum)
-│   ├── prompt-api.ts          ← Chrome LanguageModel wrapper
-│   ├── tour-sdk.ts            ← Tour class + goto() primitive
-│   ├── streaming-executor.ts  ← regex parser for partial tour.goto() calls
-│   ├── map-renderer.ts        ← MapLibre TourRenderer impl
-│   └── app.ts                 ← DOM glue + lifecycle
-└── env.d.ts                   ← ambient types (cloudflare:workers, env)
+HNDeck does not `eval` model output.
 
-wrangler.jsonc                 ← minimal: name + compat date + flags
-astro.config.mjs               ← @astrojs/cloudflare adapter, output:server
-```
+1. The app fetches an HN story batch.
+2. The prompt lists custom columns and candidate stories.
+3. Nano emits small DSL calls like `deck.place("columnId", storyId)` or `deck.place("", storyId)` for no matching custom column.
+4. The streaming executor parses those calls from text.
+5. The SDK validates story IDs and column IDs.
+6. Valid placements render story cards in matching columns.
 
-## Adding a new city
-
-1. Add a `City` entry to `CITIES` in `src/lib/locations.ts` with `center`
-   and `zoom`.
-2. Add 4–5 `Location` entries with hardcoded `coords` for the city's
-   landmarks. Pick well-known ones — Nano's recall is best on famous
-   places.
-3. Add the local Cloudflare office (if any) with `cloudflare: true`.
-4. The system prompt + map UI pick up the new city automatically.
-
-## Why this is *not* another diagram demo
-
-Code Mode patterns work for any output target. [`drawmode`](../drawmode)
-emits Excalidraw, [`gomode`](../gomode) emits Go programs,
-[`querymode`](../querymode) emits SQL. This demo emits **animated map
-tours**. The same pattern, a different rendering target, with the
-smallest possible LLM (Nano, on the user's device).
+Nano writes explicit placement decisions; the app validates and applies them. Empty-column decisions are accepted but do not render a card.

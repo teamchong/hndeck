@@ -8,7 +8,8 @@ import {
   hnPermalink,
   hnUserUrl,
   hostOf,
-  type HNStory,
+  stripHtml,
+  type HNFeedItem,
 } from "./hn-client";
 import {
   addColumn,
@@ -37,6 +38,7 @@ const OPFS_DOM_SNAPSHOT_FILE = "hn-deck-dom-v1.json";
 const APP_CSS_ID = "hn-deck-app-css";
 const CUSTOM_CSS_ID = "hn-deck-custom-css";
 const THEME_VARS_CSS_ID = "hn-deck-theme-vars";
+const DROP_PLACEHOLDER_ID = "deck-column-drop-placeholder";
 const CSS_VAR_NAMES = [
   "--bg",
   "--bg-2",
@@ -52,20 +54,18 @@ const CSS_VAR_NAMES = [
   "--green",
   "--red",
 ] as const;
+const UI_SIZES = ["compact", "normal", "large"] as const;
+type UISize = (typeof UI_SIZES)[number];
 
 interface ColumnItem {
   storyId: number;
-  headline?: string;
-  body?: string;
   lastRenderedAt: number;
 }
 
 interface DOM {
   status: HTMLElement;
   deck: HTMLElement;
-  contextBox: HTMLTextAreaElement;
-  sessionBox: HTMLInputElement;
-  reloadEveryBtn: HTMLButtonElement;
+  instructionsBox: HTMLTextAreaElement;
   addColumnBtn: HTMLButtonElement;
   setupBanner: HTMLElement;
   setupTitle: HTMLElement;
@@ -81,9 +81,11 @@ interface DOM {
   columnTitle: HTMLInputElement;
   columnKind: HTMLSelectElement;
   columnPredicate: HTMLTextAreaElement;
+  columnFilter: HTMLInputElement;
   columnSave: HTMLButtonElement;
   columnCancel: HTMLButtonElement;
   columnClose: HTMLButtonElement;
+  uiSizeBtn: HTMLButtonElement;
   resetState: HTMLButtonElement;
 }
 
@@ -98,6 +100,7 @@ interface ColumnRuntime {
   topRefreshing: boolean;
   topPull: number;
   topPullReset: number | null;
+  autoReloadTimer: number | null;
   hasMore: boolean;
 }
 
@@ -105,17 +108,14 @@ interface AppState {
   deck: Deck;
   columns: Map<string, ColumnRuntime>;
   columnItems: Map<string, ColumnItem[]>;
-  storyById: Map<number, HNStory>;
-  readerContext: string;
-  sessionPrompt: string;
+  storyById: Map<number, HNFeedItem>;
+  routingInstructions: string;
   modelReady: boolean;
   routingCursor: number;
   routing: boolean;
   /** True while rendering cards from a Nano routing/polling pass. */
   markingFresh: boolean;
-  autoReloadTimer: number | null;
-  autoReloadMs: number;
-  autoReloadEnabled: boolean;
+  uiSize: UISize;
   focusedColumnId: string | null;
   editingColumnId: string | null;
   mastheadTitle: string;
@@ -138,10 +138,8 @@ interface AppState {
 
 interface PersistedState {
   deck: Deck;
-  readerContext: string;
-  sessionPrompt: string;
-  autoReloadMs: number;
-  autoReloadEnabled: boolean;
+  routingInstructions: string;
+  uiSize: UISize;
   mastheadTitle: string;
   mastheadSubtitle: string;
   mastheadTitleVisible: boolean;
@@ -186,15 +184,12 @@ async function startDeckAppAsync(): Promise<void> {
     columns: new Map(),
     columnItems: new Map(),
     storyById: new Map(),
-    readerContext: persisted?.readerContext ?? "",
-    sessionPrompt: persisted?.sessionPrompt ?? "",
+    routingInstructions: persisted?.routingInstructions ?? "",
     modelReady: false,
     routingCursor: 0,
     routing: false,
     markingFresh: false,
-    autoReloadTimer: null,
-    autoReloadMs: persisted?.autoReloadMs ?? DEFAULT_AUTO_RELOAD_MS,
-    autoReloadEnabled: persisted?.autoReloadEnabled ?? true,
+    uiSize: persisted?.uiSize ?? "normal",
     focusedColumnId: null,
     editingColumnId: null,
     mastheadTitle: persisted?.mastheadTitle ?? readMastheadTitle(),
@@ -208,6 +203,7 @@ async function startDeckAppAsync(): Promise<void> {
     domSnapshotRepairing: false,
   };
 
+  applyUISize(state);
   syncAppOwnedControls(state, dom);
   applyMasthead(state);
   observeMastheadEdits(state);
@@ -216,7 +212,6 @@ async function startDeckAppAsync(): Promise<void> {
   applyCustomCSS(state.customCSS);
   observeCustomCSSEdits(state);
   renderDeck(state, dom);
-  updateReloadEveryButton(state, dom);
   bindCoreControls(state, dom);
   markAppReady();
   window.addEventListener("resize", () => updateDeckOverflowState(dom));
@@ -312,16 +307,18 @@ function ensureCoreDOM(baseline: DOMBaseline): void {
   ensureChildElement("setup-banner", main, baseline);
   ensureChildElement("deck", main, baseline);
   ensureDialogWithChildren("about-dialog", ["about-close"], baseline);
-  ensureDialogWithChildren("editor-dialog", ["editor-close", "editor-done", "reader-context", "session-prompt", "reset-state"], baseline);
-  ensureDialogWithChildren("column-dialog", ["column-close", "column-title", "column-kind", "column-predicate", "column-save", "column-cancel"], baseline);
+  ensureDialogWithChildren("editor-dialog", ["editor-close", "editor-done", "routing-instructions", "ui-size-btn", "reset-state"], baseline);
+  ensureDialogWithChildren("column-dialog", ["column-close", "column-title", "column-kind", "column-predicate", "column-filter", "column-save", "column-cancel"], baseline);
   ensureAppCSS(baseline);
 }
 
 function ensureTopbar(baseline: DOMBaseline): void {
-  const required = ["reload-every-btn", "add-column-btn", "editor-btn", "about-btn"];
+  const required = ["add-column-btn", "editor-btn", "about-btn", "github-link"];
   const current = document.querySelector<HTMLElement>(".topbar");
-  if (current && required.every((id) => document.getElementById(id))) return;
   const next = cloneBaselineElement<HTMLElement>(baseline, ".topbar");
+  const currentVersion = current?.dataset.appVersion ?? "";
+  const baselineVersion = next?.dataset.appVersion ?? "";
+  if (current && required.every((id) => document.getElementById(id)) && currentVersion === baselineVersion) return;
   if (!next || !document.body) return;
   current?.remove();
   document.body.insertBefore(next, document.body.firstChild);
@@ -347,8 +344,10 @@ function ensureChildElement(id: string, parent: HTMLElement, baseline: DOMBaseli
 
 function ensureDialogWithChildren(id: string, childIds: string[], baseline: DOMBaseline): void {
   const current = document.getElementById(id) as HTMLElement | null;
-  if (current && childIds.every((childId) => document.getElementById(childId))) return;
   const next = cloneBaselineElement<HTMLElement>(baseline, `#${id}`);
+  const currentVersion = current?.dataset.appVersion ?? "";
+  const baselineVersion = next?.dataset.appVersion ?? "";
+  if (current && childIds.every((childId) => document.getElementById(childId)) && currentVersion === baselineVersion) return;
   if (!next || !document.body) return;
   current?.remove();
   document.body.appendChild(next);
@@ -375,9 +374,7 @@ function getDOM(): DOM {
   return {
     status: get("status"),
     deck: get("deck"),
-    contextBox: get<HTMLTextAreaElement>("reader-context"),
-    sessionBox: get<HTMLInputElement>("session-prompt"),
-    reloadEveryBtn: get<HTMLButtonElement>("reload-every-btn"),
+    instructionsBox: get<HTMLTextAreaElement>("routing-instructions"),
     addColumnBtn: get<HTMLButtonElement>("add-column-btn"),
     setupBanner: get("setup-banner"),
     setupTitle: get("setup-title"),
@@ -393,9 +390,11 @@ function getDOM(): DOM {
     columnTitle: get<HTMLInputElement>("column-title"),
     columnKind: get<HTMLSelectElement>("column-kind"),
     columnPredicate: get<HTMLTextAreaElement>("column-predicate"),
+    columnFilter: get<HTMLInputElement>("column-filter"),
     columnSave: get<HTMLButtonElement>("column-save"),
     columnCancel: get<HTMLButtonElement>("column-cancel"),
     columnClose: get<HTMLButtonElement>("column-close"),
+    uiSizeBtn: get<HTMLButtonElement>("ui-size-btn"),
     resetState: get<HTMLButtonElement>("reset-state"),
   };
 }
@@ -409,25 +408,20 @@ function tryGetDOM(): DOM | null {
 }
 
 function syncAppOwnedControls(state: AppState, dom: DOM): void {
-  if (dom.contextBox.value !== state.readerContext) dom.contextBox.value = state.readerContext;
-  if (dom.sessionBox.value !== state.sessionPrompt) dom.sessionBox.value = state.sessionPrompt;
-  updateReloadEveryButton(state, dom);
+  if (dom.instructionsBox.value !== state.routingInstructions) dom.instructionsBox.value = state.routingInstructions;
+  updateUISizeButton(state, dom);
 }
 
 function bindCoreControls(state: AppState, dom: DOM): void {
-  dom.contextBox.oninput = () => {
-    state.readerContext = dom.contextBox.value;
-    queuePersistState(state);
-  };
-  dom.sessionBox.oninput = () => {
-    state.sessionPrompt = dom.sessionBox.value;
+  dom.instructionsBox.oninput = () => {
+    state.routingInstructions = dom.instructionsBox.value;
     queuePersistState(state);
   };
   dom.setupBegin.onclick = () => void beginModelDownload(state, dom);
   dom.setupRetry.onclick = () => void bootstrap(state, dom);
-  dom.reloadEveryBtn.onclick = () => toggleAutoReload(state, dom);
+  dom.uiSizeBtn.onclick = () => toggleUISize(state, dom);
   dom.addColumnBtn.onclick = () => openColumnDialog(state, dom, null);
-  dom.columnKind.onchange = () => syncColumnPredicateState(dom);
+  dom.columnKind.onchange = () => syncColumnKindState(dom, true);
   dom.columnSave.onclick = () => saveColumnDialog(state, dom);
   dom.columnCancel.onclick = () => closeColumnDialog(state, dom);
   dom.columnClose.onclick = () => closeColumnDialog(state, dom);
@@ -437,6 +431,34 @@ function bindCoreControls(state: AppState, dom: DOM): void {
   };
   wireDialogControls("about-dialog", "about-btn", "about-close");
   wireDialogControls("editor-dialog", "editor-btn", "editor-close", "editor-done");
+  bindKeyboardShortcuts(state, dom);
+}
+
+function bindKeyboardShortcuts(state: AppState, dom: DOM): void {
+  document.onkeydown = (ev) => {
+    if (isTypingTarget(ev.target)) return;
+    if (document.querySelector("dialog[open]") && ev.key !== "?") return;
+    if (ev.key === "n") {
+      ev.preventDefault();
+      openColumnDialog(state, dom, null);
+    } else if (ev.key === "c") {
+      ev.preventDefault();
+      document.getElementById("editor-btn")?.click();
+    } else if (ev.key === "?") {
+      ev.preventDefault();
+      printDevToolsInstructions();
+    } else if (ev.key === "Escape" && state.focusedColumnId !== null) {
+      ev.preventDefault();
+      state.focusedColumnId = null;
+      applyFocusState(state, dom);
+    }
+  };
+}
+
+function isTypingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const tag = target.tagName.toLowerCase();
+  return target.isContentEditable || tag === "input" || tag === "textarea" || tag === "select";
 }
 
 function wireDialogControls(dialogId: string, openBtnId: string, closeBtnId: string, doneBtnId?: string): void {
@@ -446,6 +468,7 @@ function wireDialogControls(dialogId: string, openBtnId: string, closeBtnId: str
   const doneBtn = doneBtnId ? document.getElementById(doneBtnId) as HTMLElement | null : null;
   if (!dlg || !openBtn) return;
   openBtn.onclick = () => {
+    if (dlg.open) dlg.close();
     if (typeof dlg.showModal === "function") dlg.showModal();
     else dlg.setAttribute("open", "");
   };
@@ -516,8 +539,7 @@ async function bootstrap(state: AppState, dom: DOM): Promise<void> {
   if (status.kind === "available") {
     state.modelReady = true;
     setSetup(dom, { kind: "hidden" });
-    dom.contextBox.disabled = false;
-    dom.sessionBox.disabled = false;
+    dom.instructionsBox.disabled = false;
     setStatus(dom, "Nano is ready. Filling curated columns…");
     void routeUntilFilled(state, dom);
     return;
@@ -539,8 +561,7 @@ async function beginModelDownload(state: AppState, dom: DOM): Promise<void> {
     warmup.destroy();
     state.modelReady = true;
     setSetup(dom, { kind: "hidden" });
-    dom.contextBox.disabled = false;
-    dom.sessionBox.disabled = false;
+    dom.instructionsBox.disabled = false;
     setStatus(dom, "Nano is ready. Filling curated columns…");
     void routeUntilFilled(state, dom);
   } catch (err) {
@@ -551,18 +572,21 @@ async function beginModelDownload(state: AppState, dom: DOM): Promise<void> {
 }
 
 function renderDeck(state: AppState, dom: DOM): void {
+  for (const rt of state.columns.values()) clearColumnAutoReloadTimer(rt);
   dom.deck.innerHTML = "";
   state.columns.clear();
   for (const column of state.deck.columns) {
     const el = document.createElement("section");
     el.className = `deck-column deck-column--${column.kind}`;
     el.dataset.columnId = column.id;
+    el.draggable = true;
     el.innerHTML = `
       <header class="deck-column__header">
         <h2 class="deck-column__title">${escapeHtml(column.title)}</h2>
         <div class="deck-column__actions">
           <button class="deck-column__btn deck-column__btn--edit" data-action="left" title="Move column left" aria-label="Move column left">←</button>
           <button class="deck-column__btn deck-column__btn--edit" data-action="right" title="Move column right" aria-label="Move column right">→</button>
+          <button class="deck-column__btn deck-column__btn--wide" data-action="reload" title="Change column auto-refresh" aria-label="Change column auto-refresh">${escapeHtml(columnReloadLabel(column))}</button>
           <button class="deck-column__btn" data-action="focus" title="Focus column" aria-label="Focus column">⛶</button>
           <button class="deck-column__btn deck-column__btn--edit" data-action="edit" title="Edit column" aria-label="Edit column">✎</button>
           <button class="deck-column__btn deck-column__btn--edit" data-action="remove" title="Remove column" aria-label="Remove column">×</button>
@@ -586,6 +610,7 @@ function renderDeck(state: AppState, dom: DOM): void {
       topRefreshing: false,
       topPull: 0,
       topPullReset: null,
+      autoReloadTimer: null,
       hasMore: true,
     };
     state.columns.set(column.id, runtime);
@@ -595,32 +620,38 @@ function renderDeck(state: AppState, dom: DOM): void {
 
     el.querySelector<HTMLElement>('[data-action="left"]')?.addEventListener("click", () => moveColumnInDeck(state, dom, column.id, -1));
     el.querySelector<HTMLElement>('[data-action="right"]')?.addEventListener("click", () => moveColumnInDeck(state, dom, column.id, 1));
+    el.querySelector<HTMLElement>('[data-action="reload"]')?.addEventListener("click", () => toggleColumnAutoReload(state, dom, column.id));
     el.querySelector<HTMLElement>('[data-action="focus"]')?.addEventListener("click", () => toggleColumnFocus(state, dom, column.id));
     el.querySelector<HTMLElement>('[data-action="edit"]')?.addEventListener("click", () => editColumn(state, dom, column.id));
     el.querySelector<HTMLElement>('[data-action="remove"]')?.addEventListener("click", () => {
+      state.columnItems.delete(column.id);
       state.deck = removeColumn(state.deck, column.id);
       queuePersistState(state);
       renderDeck(state, dom);
     });
 
     body.addEventListener("scroll", () => {
-      resetAutoReloadTimer(state, dom);
+      resetColumnAutoReloadTimer(state, dom, runtime);
       if (body.scrollTop + body.clientHeight >= body.scrollHeight - 240) {
         if (column.kind === "raw") void loadRawBatch(state, runtime);
         else void routeUntilFilled(state, dom);
       }
     });
     body.addEventListener("wheel", (ev) => {
-      resetAutoReloadTimer(state, dom);
+      resetColumnAutoReloadTimer(state, dom, runtime);
       if (body.scrollTop <= 0 && ev.deltaY < 0) {
         runtime.topPull += Math.abs(ev.deltaY);
         runtime.topStatus.hidden = false;
-        runtime.topStatus.textContent = runtime.topPull >= 80 ? "Refreshing…" : "Pull to refresh";
+        runtime.topStatus.classList.toggle("deck-column__top-status--ready", runtime.topPull >= 80);
+        runtime.topStatus.innerHTML = `
+          <span>${runtime.topPull >= 80 ? "Release to refresh" : "Pull to refresh"}</span>
+          <span class="deck-column__top-progress" style="width:${Math.min(100, Math.round((runtime.topPull / 80) * 100))}%"></span>
+        `;
         if (runtime.topPullReset !== null) window.clearTimeout(runtime.topPullReset);
         runtime.topPullReset = window.setTimeout(() => {
           runtime.topPull = 0;
-          if (!runtime.topRefreshing) runtime.topStatus.hidden = true;
-        }, 240);
+          if (!runtime.topRefreshing) hideTopStatus(runtime);
+        }, 650);
         if (runtime.topPull >= 80) {
           runtime.topPull = 0;
           void refreshColumnFromTop(state, dom, runtime);
@@ -630,10 +661,12 @@ function renderDeck(state: AppState, dom: DOM): void {
 
     if (column.kind === "raw") {
       if (getColumnItems(state, column.id).length === 0) void loadRawBatch(state, runtime);
-      else runtime.sentinel.textContent = runtime.hasMore ? "Scroll for more" : "End of HN topstories";
+      else runtime.sentinel.textContent = runtime.hasMore ? "Scroll for more" : endOfFeedLabel(runtime.column);
     } else if (getColumnItems(state, column.id).length === 0) {
       renderCuratedEmpty(runtime);
     }
+    bindColumnDragEvents(state, dom, runtime);
+    scheduleColumnAutoReload(state, dom, runtime);
   }
   applyFocusState(state, dom);
   updateDeckOverflowState(dom);
@@ -647,42 +680,79 @@ function updateDeckOverflowState(dom: DOM): void {
 }
 
 function renderCuratedEmpty(runtime: ColumnRuntime): void {
-  runtime.body.innerHTML = `
-    <p class="deck-empty">
-      Waiting for Nano routing. Once Nano is ready, stories matching
-      this column's description will appear here automatically.
-    </p>
-  `;
+  renderColumnMessage(runtime, "Waiting for Nano routing. Once Nano is ready, stories matching this column's description will appear here automatically.");
   runtime.sentinel.textContent = "Not routed yet";
+}
+
+function renderColumnMessage(runtime: ColumnRuntime, text: string, kind: "empty" | "error" = "empty"): void {
+  runtime.body.innerHTML = `<p class="deck-empty ${kind === "error" ? "deck-empty--error" : ""}">${escapeHtml(text)}</p>`;
 }
 
 async function loadRawBatch(state: AppState, runtime: ColumnRuntime): Promise<void> {
   if (runtime.loading || !runtime.hasMore) return;
   runtime.loading = true;
   runtime.sentinel.textContent = "Loading more…";
-  const batch = await fetchFeedStoryBatch(
-    runtime.column.feed ?? "top",
-    runtime.cursor,
-    runtime.cursor + BATCH,
-    undefined,
-    { user: runtime.column.feedUser, month: runtime.column.feedMonth },
-  );
-  for (const story of batch.stories) {
-    if (runtime.body.querySelector(`[data-story-id="${story.id}"]`)) continue;
-    state.storyById.set(story.id, story);
-    upsertColumnItem(state, runtime.column.id, { storyId: story.id, lastRenderedAt: Date.now() });
-    runtime.body.appendChild(renderStoryCard(story));
+  try {
+    const batch = await fetchFeedStoryBatch(
+      runtime.column.feed ?? "top",
+      runtime.cursor,
+      runtime.cursor + BATCH,
+      undefined,
+      { user: runtime.column.feedUser, month: runtime.column.feedMonth },
+    );
+    let added = 0;
+    for (const story of batch.stories) {
+      if (!matchesColumnFilter(story, runtime.column.filter)) continue;
+      if (runtime.body.querySelector(`[data-story-id="${story.id}"]`)) continue;
+      state.storyById.set(story.id, story);
+      upsertColumnItem(state, runtime.column.id, { storyId: story.id, lastRenderedAt: Date.now() });
+      runtime.body.appendChild(renderStoryCard(story));
+      added++;
+    }
+    runtime.cursor += BATCH;
+    runtime.hasMore = batch.hasMore;
+    if (visibleCardCount(runtime) === 0 && !runtime.hasMore) renderColumnMessage(runtime, "No items found for this column.");
+    runtime.sentinel.textContent = runtime.hasMore ? "Scroll for more" : endOfFeedLabel(runtime.column);
+    if (added === 0 && runtime.hasMore) runtime.sentinel.textContent = "Scroll for more matches";
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    runtime.sentinel.textContent = "Load failed";
+    if (visibleCardCount(runtime) === 0) renderColumnMessage(runtime, `Could not load this column: ${message}`, "error");
+  } finally {
+    runtime.loading = false;
   }
-  runtime.cursor += BATCH;
-  runtime.hasMore = batch.hasMore;
-  runtime.loading = false;
-  runtime.sentinel.textContent = runtime.hasMore ? "Scroll for more" : "End of HN topstories";
+}
+
+function endOfFeedLabel(column: Column): string {
+  switch (column.feed) {
+    case "new": return "End of HN new stories";
+    case "ask": return "End of Ask HN";
+    case "show": return "End of Show HN";
+    case "user": return "End of user activity";
+    case "best-month": return "End of monthly best";
+    case "top":
+    default: return "End of HN top stories";
+  }
+}
+
+function matchesColumnFilter(story: HNFeedItem, filter: string | undefined): boolean {
+  const q = filter?.trim().toLowerCase();
+  if (!q) return true;
+  const haystack = [
+    story.by,
+    story.type === "story" ? story.title : story.text,
+    story.type === "story" ? story.url ?? "" : "",
+    story.type === "story" ? hostOf(story.url) : "news.ycombinator.com",
+  ].join(" ").toLowerCase();
+  return q.split(/\s+/).every((term) => haystack.includes(term));
 }
 
 async function refreshColumnFromTop(state: AppState, dom: DOM, runtime: ColumnRuntime): Promise<void> {
   if (runtime.topRefreshing) return;
   runtime.topRefreshing = true;
   runtime.topStatus.hidden = false;
+  runtime.topStatus.classList.remove("deck-column__top-status--ready");
+  runtime.topStatus.classList.add("deck-column__top-status--loading");
   runtime.topStatus.innerHTML = `<span class="deck-spinner" aria-hidden="true"></span> Refreshing…`;
   try {
     if (runtime.column.kind === "raw") {
@@ -697,18 +767,19 @@ async function refreshColumnFromTop(state: AppState, dom: DOM, runtime: ColumnRu
       const fragment = document.createDocumentFragment();
       let added = 0;
       for (const story of batch.stories) {
+        if (!matchesColumnFilter(story, runtime.column.filter)) continue;
         state.storyById.set(story.id, story);
         const item = { storyId: story.id, lastRenderedAt: Date.now() };
         const existing = runtime.body.querySelector<HTMLElement>(`[data-story-id="${story.id}"]`);
         if (existing) {
           if (!shouldReplaceColumnItem(state, runtime.column.id, story.id)) continue;
           upsertColumnItem(state, runtime.column.id, item);
-          existing.replaceWith(renderStoryCard(story, undefined, undefined, true));
+          existing.replaceWith(renderStoryCard(story, true));
           added++;
           continue;
         }
         upsertColumnItem(state, runtime.column.id, item, "prepend");
-        fragment.appendChild(renderStoryCard(story, undefined, undefined, true));
+        fragment.appendChild(renderStoryCard(story, true));
         added++;
       }
       if (added > 0) runtime.body.prepend(fragment);
@@ -719,13 +790,25 @@ async function refreshColumnFromTop(state: AppState, dom: DOM, runtime: ColumnRu
       await routeFreshTopBatch(state, dom);
       runtime.sentinel.textContent = "Refreshed";
     }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    runtime.sentinel.textContent = "Refresh failed";
+    if (visibleCardCount(runtime) === 0) renderColumnMessage(runtime, `Could not refresh this column: ${message}`, "error");
   } finally {
     runtime.topRefreshing = false;
+    runtime.topStatus.classList.remove("deck-column__top-status--loading");
     runtime.topPull = 0;
     window.setTimeout(() => {
-      if (!runtime.topRefreshing) runtime.topStatus.hidden = true;
-    }, 700);
+      if (!runtime.topRefreshing) hideTopStatus(runtime);
+    }, 900);
+    scheduleColumnAutoReload(state, dom, runtime);
   }
+}
+
+function hideTopStatus(runtime: ColumnRuntime): void {
+  runtime.topStatus.hidden = true;
+  runtime.topStatus.classList.remove("deck-column__top-status--ready", "deck-column__top-status--loading");
+  runtime.topStatus.textContent = "Release to refresh";
 }
 
 async function routeNextBatch(state: AppState, dom: DOM): Promise<void> {
@@ -744,7 +827,6 @@ async function routeNextBatch(state: AppState, dom: DOM): Promise<void> {
     await routeOneBatch(state, dom);
   } finally {
     state.routing = false;
-    scheduleAutoReload(state, dom);
   }
 }
 
@@ -775,21 +857,21 @@ async function routeUntilFilled(state: AppState, dom: DOM): Promise<void> {
     }
   } finally {
     state.routing = false;
-    scheduleAutoReload(state, dom);
   }
 }
 
 async function routeOneBatch(
   state: AppState,
   dom: DOM,
-  opts: { clearFirstBatch?: boolean; silent?: boolean } = {},
+  opts: { clearFirstBatch?: boolean; silent?: boolean; fresh?: boolean } = {},
 ): Promise<boolean> {
   const clearFirstBatch = opts.clearFirstBatch ?? true;
   const silent = opts.silent ?? false;
+  const fresh = opts.fresh ?? false;
   const curated = state.deck.columns.filter((c) => c.kind === "curated");
   if (curated.length === 0) return false;
   setRoutingVisuals(state, true);
-  state.markingFresh = true;
+  state.markingFresh = fresh;
   if (!silent) {
     setStatus(dom, `Routing stories ${state.routingCursor + 1}–${state.routingCursor + BATCH} through Nano…`);
   }
@@ -803,32 +885,43 @@ async function routeOneBatch(
     }
   }
 
-  const sink: DeckSink = {
-    enqueue(action) {
-      renderDeckAction(state, action);
-    },
-    onSkip(reason) {
-      console.warn("[deck] skipped", reason);
-    },
-  };
-  const router = new DeckRouter(curated.map((c) => c.id), batch.stories.map((s) => s.id), sink);
-  const executor = createDeckExecutor(router);
-  const readerContext = [dom.contextBox.value.trim(), dom.sessionBox.value.trim() ? `Today's directive: ${dom.sessionBox.value.trim()}` : ""]
-    .filter(Boolean)
-    .join("\n");
+  const routingInstructions = dom.instructionsBox.value.trim();
 
-  let session;
+  let decisions = 0;
   try {
-    session = await createSession(buildDeckSystemPrompt({ readerContext, columns: state.deck.columns, stories: batch.stories, batchStart: state.routingCursor }));
-    for await (const chunk of streamPrompt(session, buildDeckUserPrompt())) executor.push(chunk);
-    executor.end();
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const sink: DeckSink = {
+        enqueue(action) {
+          if (renderDeckAction(state, action)) decisions++;
+        },
+        onSkip(reason) {
+          console.warn("[deck] skipped", reason);
+        },
+      };
+      const router = new DeckRouter(curated.map((c) => c.id), batch.stories.map((s) => s.id), sink);
+      const executor = createDeckExecutor(router);
+      const session = await createSession(buildDeckSystemPrompt({ routingInstructions, columns: state.deck.columns, stories: batch.stories, batchStart: state.routingCursor }));
+      try {
+        for await (const chunk of streamPrompt(session, buildDeckUserPrompt(attempt > 0))) executor.push(chunk);
+        executor.end();
+      } finally {
+        session.destroy();
+      }
+      if (decisions > 0 || attempt > 0) break;
+      if (!silent) setStatus(dom, "Nano returned no valid decisions. Retrying once…");
+    }
     state.routingCursor += BATCH;
     return batch.hasMore;
   } catch (err) {
-    setStatus(dom, `Routing failed: ${err instanceof Error ? err.message : String(err)}`, "error");
+    const message = err instanceof Error ? err.message : String(err);
+    setStatus(dom, `Routing failed: ${message}`, "error");
+    for (const rt of state.columns.values()) {
+      if (rt.column.kind !== "curated") continue;
+      rt.sentinel.textContent = "Routing failed";
+      if (visibleCardCount(rt) === 0) renderColumnMessage(rt, `Could not route this column: ${message}`, "error");
+    }
     return false;
   } finally {
-    session?.destroy();
     state.markingFresh = false;
     setRoutingVisuals(state, false);
   }
@@ -841,58 +934,73 @@ async function routeFreshTopBatch(state: AppState, dom: DOM): Promise<void> {
   try {
     clearHNCache();
     state.routingCursor = 0;
-    await routeOneBatch(state, dom, { clearFirstBatch: false, silent: true });
+    await routeOneBatch(state, dom, { clearFirstBatch: false, silent: true, fresh: true });
   } finally {
     state.routingCursor = previousCursor;
     state.routing = false;
-    scheduleAutoReload(state, dom);
   }
 }
 
-function scheduleAutoReload(state: AppState, dom: DOM): void {
-  clearAutoReloadTimer(state);
-  if (!state.autoReloadEnabled) return;
-  state.autoReloadTimer = window.setTimeout(() => {
-    void routeFreshTopBatch(state, dom);
-  }, state.autoReloadMs);
-  updateReloadEveryButton(state, dom);
+function scheduleColumnAutoReload(state: AppState, dom: DOM, runtime: ColumnRuntime): void {
+  clearColumnAutoReloadTimer(runtime);
+  if (!columnAutoReloadEnabled(runtime.column)) return;
+  runtime.autoReloadTimer = window.setTimeout(() => {
+    runtime.autoReloadTimer = null;
+    void refreshColumnFromTop(state, dom, runtime);
+  }, columnAutoReloadMs(runtime.column));
 }
 
-function resetAutoReloadTimer(state: AppState, dom: DOM): void {
-  if (!state.autoReloadEnabled) return;
-  scheduleAutoReload(state, dom);
+function resetColumnAutoReloadTimer(state: AppState, dom: DOM, runtime: ColumnRuntime): void {
+  if (!columnAutoReloadEnabled(runtime.column)) return;
+  scheduleColumnAutoReload(state, dom, runtime);
 }
 
-function clearAutoReloadTimer(state: AppState): void {
-  if (state.autoReloadTimer !== null) {
-    clearTimeout(state.autoReloadTimer);
-    state.autoReloadTimer = null;
+function clearColumnAutoReloadTimer(runtime: ColumnRuntime): void {
+  if (runtime.autoReloadTimer !== null) {
+    clearTimeout(runtime.autoReloadTimer);
+    runtime.autoReloadTimer = null;
   }
 }
 
-function toggleAutoReload(state: AppState, dom: DOM): void {
-  if (!state.autoReloadEnabled) {
-    state.autoReloadEnabled = true;
-    state.autoReloadMs = AUTO_RELOAD_OPTIONS[0];
-    scheduleAutoReload(state, dom);
-    return;
-  }
-
-  const idx = AUTO_RELOAD_OPTIONS.findIndex((ms) => ms === state.autoReloadMs);
-  const next = idx + 1;
-  if (next >= AUTO_RELOAD_OPTIONS.length) {
-    state.autoReloadEnabled = false;
-    clearAutoReloadTimer(state);
+function toggleColumnAutoReload(state: AppState, dom: DOM, columnId: string): void {
+  const column = state.deck.columns.find((c) => c.id === columnId);
+  const runtime = state.columns.get(columnId);
+  if (!column || !runtime) return;
+  if (!columnAutoReloadEnabled(column)) {
+    column.autoReloadEnabled = true;
+    column.autoReloadMs = AUTO_RELOAD_OPTIONS[0];
   } else {
-    state.autoReloadMs = AUTO_RELOAD_OPTIONS[next];
-    scheduleAutoReload(state, dom);
+    const idx = AUTO_RELOAD_OPTIONS.findIndex((ms) => ms === columnAutoReloadMs(column));
+    const next = idx + 1;
+    if (next >= AUTO_RELOAD_OPTIONS.length) {
+      column.autoReloadEnabled = false;
+    } else {
+      column.autoReloadEnabled = true;
+      column.autoReloadMs = AUTO_RELOAD_OPTIONS[next];
+    }
   }
-  updateReloadEveryButton(state, dom);
+  updateColumnReloadButton(runtime);
+  scheduleColumnAutoReload(state, dom, runtime);
+  queuePersistState(state);
 }
 
-function updateReloadEveryButton(state: AppState, dom: DOM): void {
-  const label = state.autoReloadEnabled ? `Reload every ${formatReloadInterval(state.autoReloadMs)}` : "Auto reload off";
-  dom.reloadEveryBtn.innerHTML = `<span aria-hidden="true">↻</span><span>${label}</span>`;
+function columnAutoReloadEnabled(column: Column): boolean {
+  return column.autoReloadEnabled !== false;
+}
+
+function columnAutoReloadMs(column: Column): number {
+  return column.autoReloadMs && AUTO_RELOAD_OPTIONS.includes(column.autoReloadMs as (typeof AUTO_RELOAD_OPTIONS)[number])
+    ? column.autoReloadMs
+    : DEFAULT_AUTO_RELOAD_MS;
+}
+
+function columnReloadLabel(column: Column): string {
+  return columnAutoReloadEnabled(column) ? `↻ ${formatReloadInterval(columnAutoReloadMs(column))}` : "↻ off";
+}
+
+function updateColumnReloadButton(runtime: ColumnRuntime): void {
+  const btn = runtime.el.querySelector<HTMLButtonElement>('[data-action="reload"]');
+  if (btn) btn.textContent = columnReloadLabel(runtime.column);
 }
 
 function formatReloadInterval(ms: number): string {
@@ -900,6 +1008,35 @@ function formatReloadInterval(ms: number): string {
   if (ms === 5 * 60_000) return "5m";
   if (ms === 60 * 60_000) return "1h";
   return `${Math.round(ms / 1000)}s`;
+}
+
+function toggleUISize(state: AppState, dom: DOM): void {
+  const current = UI_SIZES.indexOf(state.uiSize);
+  state.uiSize = UI_SIZES[(current + 1) % UI_SIZES.length] ?? "normal";
+  applyUISize(state);
+  updateUISizeButton(state, dom);
+  queuePersistState(state);
+}
+
+function applyUISize(state: AppState): void {
+  document.documentElement.dataset.uiSize = state.uiSize;
+}
+
+function updateUISizeButton(state: AppState, dom: DOM): void {
+  dom.uiSizeBtn.textContent = `UI size: ${labelUISize(state.uiSize)}`;
+}
+
+function labelUISize(size: UISize): string {
+  switch (size) {
+    case "compact": return "Compact";
+    case "large": return "Large";
+    case "normal":
+    default: return "Normal";
+  }
+}
+
+function coerceUISize(value: unknown): UISize {
+  return typeof value === "string" && UI_SIZES.includes(value as UISize) ? value as UISize : "normal";
 }
 
 function underfilledCuratedColumns(state: AppState): ColumnRuntime[] {
@@ -926,49 +1063,20 @@ function setRoutingVisuals(state: AppState, active: boolean): void {
   }
 }
 
-function renderDeckAction(state: AppState, action: DeckAction): void {
-  if (action.kind === "drop") return;
+function renderDeckAction(state: AppState, action: DeckAction): boolean {
+  if (action.columnId === "") return state.storyById.has(action.storyId);
   const rt = state.columns.get(action.columnId);
-  if (!rt) return;
-  if (action.kind === "note") {
-    const p = document.createElement("p");
-    p.className = "deck-note";
-    p.textContent = action.text;
-    rt.body.appendChild(p);
-    return;
-  }
-  if (action.kind === "place") {
-    const story = state.storyById.get(action.storyId);
-    if (!story) return;
-    if (!shouldReplaceColumnItem(state, rt.column.id, action.storyId)) return;
-    const nextItem: ColumnItem = {
-      storyId: story.id,
-      headline: action.headline,
-      body: action.body,
-      lastRenderedAt: Date.now(),
-    };
-    upsertColumnItem(state, rt.column.id, nextItem);
-    const card = renderStoryCard(story, action.headline, action.body, state.markingFresh);
-    const existing = rt.body.querySelector<HTMLElement>(`[data-story-id="${story.id}"]`);
-    if (existing) existing.replaceWith(card);
-    else rt.body.appendChild(card);
-    return;
-  }
-  // No subgroup UI. If Nano disobeys and emits cluster(), flatten it
-  // into normal individual cards in that column.
-  const stories = action.storyIds
-    .filter((id) => !rt.body.querySelector(`[data-story-id="${id}"]`))
-    .map((id) => state.storyById.get(id))
-    .filter((s): s is HNStory => !!s);
-  for (const story of stories) {
-    if (!shouldReplaceColumnItem(state, rt.column.id, story.id)) continue;
-    const body = `${action.title}: ${action.body}`;
-    upsertColumnItem(state, rt.column.id, { storyId: story.id, body, lastRenderedAt: Date.now() });
-    const card = renderStoryCard(story, undefined, body, state.markingFresh);
-    const existing = rt.body.querySelector<HTMLElement>(`[data-story-id="${story.id}"]`);
-    if (existing) existing.replaceWith(card);
-    else rt.body.appendChild(card);
-  }
+  if (!rt) return false;
+  const story = state.storyById.get(action.storyId);
+  if (!story) return false;
+  if (!shouldReplaceColumnItem(state, rt.column.id, action.storyId)) return false;
+  upsertColumnItem(state, rt.column.id, { storyId: story.id, lastRenderedAt: Date.now() }, state.markingFresh ? "prepend" : "append");
+  const card = renderStoryCard(story, state.markingFresh);
+  const existing = rt.body.querySelector<HTMLElement>(`[data-story-id="${story.id}"]`);
+  if (existing) existing.replaceWith(card);
+  else if (state.markingFresh) rt.body.prepend(card);
+  else rt.body.appendChild(card);
+  return true;
 }
 
 function renderColumnCache(state: AppState, runtime: ColumnRuntime): void {
@@ -978,7 +1086,7 @@ function renderColumnCache(state: AppState, runtime: ColumnRuntime): void {
   for (const item of items) {
     const story = state.storyById.get(item.storyId);
     if (!story) continue;
-    runtime.body.appendChild(renderStoryCard(story, item.headline, item.body));
+    runtime.body.appendChild(renderStoryCard(story));
   }
   runtime.cursor = Math.max(runtime.cursor, items.length);
 }
@@ -1002,12 +1110,10 @@ function upsertColumnItem(
   const idx = items.findIndex((x) => x.storyId === item.storyId);
   if (idx >= 0) {
     items[idx] = { ...items[idx], ...item };
-    queuePersistState(state);
     return;
   }
   if (mode === "prepend") items.unshift(item);
   else items.push(item);
-  queuePersistState(state);
 }
 
 function shouldReplaceColumnItem(state: AppState, columnId: string, storyId: number): boolean {
@@ -1027,10 +1133,12 @@ async function loadPersistedState(): Promise<PersistedState | null> {
 
     return {
       deck: coerceDeck(raw.deck),
-      readerContext: typeof raw.readerContext === "string" ? raw.readerContext : "",
-      sessionPrompt: typeof raw.sessionPrompt === "string" ? raw.sessionPrompt : "",
-      autoReloadMs: typeof raw.autoReloadMs === "number" ? raw.autoReloadMs : DEFAULT_AUTO_RELOAD_MS,
-      autoReloadEnabled: typeof raw.autoReloadEnabled === "boolean" ? raw.autoReloadEnabled : true,
+      routingInstructions: typeof raw.routingInstructions === "string"
+        ? raw.routingInstructions
+        : typeof raw.readerContext === "string"
+          ? raw.readerContext
+          : "",
+      uiSize: coerceUISize(raw.uiSize),
       mastheadTitle: typeof raw.mastheadTitle === "string" ? raw.mastheadTitle : readMastheadTitle(),
       mastheadSubtitle: typeof raw.mastheadSubtitle === "string" ? raw.mastheadSubtitle : readMastheadSubtitle(),
       mastheadTitleVisible: typeof raw.mastheadTitleVisible === "boolean" ? raw.mastheadTitleVisible : true,
@@ -1056,10 +1164,8 @@ async function persistStateNow(state: AppState): Promise<void> {
   if (!root) return;
   const snapshot = {
     deck: state.deck,
-    readerContext: state.readerContext,
-    sessionPrompt: state.sessionPrompt,
-    autoReloadMs: state.autoReloadMs,
-    autoReloadEnabled: state.autoReloadEnabled,
+    routingInstructions: state.routingInstructions,
+    uiSize: state.uiSize,
     mastheadTitle: state.mastheadTitle,
     mastheadSubtitle: state.mastheadSubtitle,
     mastheadTitleVisible: state.mastheadTitleVisible,
@@ -1112,8 +1218,18 @@ async function persistDOMSnapshotNow(): Promise<void> {
   if (!root) return;
   const handle = await root.getFileHandle(OPFS_DOM_SNAPSHOT_FILE, { create: true });
   const writable = await handle.createWritable();
-  await writable.write(JSON.stringify(readDOMSnapshot()));
+  await writable.write(JSON.stringify(readPersistableDOMSnapshot()));
   await writable.close();
+}
+
+function readPersistableDOMSnapshot(): DOMSnapshot {
+  const snapshot = readDOMSnapshot();
+  const template = document.createElement("template");
+  template.innerHTML = snapshot.bodyHTML;
+  for (const dialog of template.content.querySelectorAll("dialog[open]")) dialog.removeAttribute("open");
+  template.content.getElementById(DROP_PLACEHOLDER_ID)?.remove();
+  for (const el of template.content.querySelectorAll(".deck-column--dragging")) el.classList.remove("deck-column--dragging");
+  return { ...snapshot, bodyHTML: template.innerHTML };
 }
 
 async function deletePersistedState(): Promise<void> {
@@ -1137,7 +1253,7 @@ async function getOPFSRoot(): Promise<FileSystemDirectoryHandle | null> {
   return storage.getDirectory ? storage.getDirectory() : null;
 }
 
-function renderStoryCard(story: HNStory, headline?: string, body?: string, fresh = false): HTMLElement {
+function renderStoryCard(story: HNFeedItem, fresh = false): HTMLElement {
   const el = document.createElement("article");
   el.className = ["deck-card", fresh ? "deck-card--fresh" : ""]
     .filter(Boolean)
@@ -1145,12 +1261,15 @@ function renderStoryCard(story: HNStory, headline?: string, body?: string, fresh
   el.dataset.storyId = String(story.id);
   if (fresh) window.setTimeout(() => el.classList.remove("deck-card--fresh"), 45_000);
   const by = story.by ?? "unknown";
-  const host = hostOf(story.url);
-  const titleHref = story.url || hnPermalink(story.id);
-  const comments = story.descendants ?? 0;
+  const isComment = story.type === "comment";
+  const host = isComment ? "news.ycombinator.com" : hostOf(story.url);
+  const titleHref = isComment ? hnPermalink(story.id) : story.url || hnPermalink(story.id);
+  const title = isComment ? `Comment by ${by}` : story.title;
+  const bodyText = isComment ? stripHtml(story.text) : undefined;
   const ts = story.time ? new Date(story.time * 1000) : null;
   const shortTime = ts ? relativeTime(ts) : "unknown time";
   const fullTime = ts ? formatFullTime(ts) : "unknown time";
+  const meta = isComment ? renderCommentMeta(story, by, shortTime, fullTime) : renderStoryMeta(story, host, by, shortTime, fullTime);
   el.innerHTML = `
     <a class="deck-card__vote"
       href="${escapeAttr(hnPermalink(story.id))}"
@@ -1169,21 +1288,11 @@ function renderStoryCard(story: HNStory, headline?: string, body?: string, fresh
       <h3 class="deck-card__title">
         <a class="deck-card__title-link"
           href="${escapeAttr(titleHref)}"
-          target="_blank" rel="noopener noreferrer">${escapeHtml(headline || story.title)}</a>
+          target="_blank" rel="noopener noreferrer">${escapeHtml(title)}</a>
       </h3>
     </div>
-    <p class="deck-card__meta">
-      <a href="${escapeAttr(hnFromSiteUrl(host))}" target="_blank" rel="noopener noreferrer">${escapeHtml(host)}</a>
-      <span>·</span>
-      <span>${story.score} pts</span>
-      <span>·</span>
-      <a href="${escapeAttr(hnPermalink(story.id))}" target="_blank" rel="noopener noreferrer">${comments} ${comments === 1 ? "comment" : "comments"}</a>
-      <span>·</span>
-      <span>by <a href="${escapeAttr(hnUserUrl(by))}" target="_blank" rel="noopener noreferrer">${escapeHtml(by)}</a></span>
-      <span>·</span>
-      <button class="deck-card__time" type="button" data-short="${escapeAttr(shortTime)}" data-full="${escapeAttr(fullTime)}" title="${escapeAttr(fullTime)}">${escapeHtml(shortTime)}</button>
-    </p>
-    ${body ? `<p class="deck-card__body">${escapeHtml(body)}</p>` : ""}
+    ${meta}
+    ${bodyText ? `<p class="deck-card__body">${escapeHtml(bodyText)}</p>` : ""}
   `;
   const timeBtn = el.querySelector<HTMLButtonElement>(".deck-card__time");
   timeBtn?.addEventListener("click", () => {
@@ -1195,6 +1304,36 @@ function renderStoryCard(story: HNStory, headline?: string, body?: string, fresh
   return el;
 }
 
+function renderStoryMeta(story: Extract<HNFeedItem, { type: "story" }>, host: string, by: string, shortTime: string, fullTime: string): string {
+  const comments = story.descendants ?? 0;
+  return `
+    <p class="deck-card__meta">
+      <a href="${escapeAttr(hnFromSiteUrl(host))}" target="_blank" rel="noopener noreferrer">${escapeHtml(host)}</a>
+      <span>·</span>
+      <span>${story.score} pts</span>
+      <span>·</span>
+      <a href="${escapeAttr(hnPermalink(story.id))}" target="_blank" rel="noopener noreferrer">${comments} ${comments === 1 ? "comment" : "comments"}</a>
+      <span>·</span>
+      <span>by <a href="${escapeAttr(hnUserUrl(by))}" target="_blank" rel="noopener noreferrer">${escapeHtml(by)}</a></span>
+      <span>·</span>
+      <button class="deck-card__time" type="button" data-short="${escapeAttr(shortTime)}" data-full="${escapeAttr(fullTime)}" title="${escapeAttr(fullTime)}">${escapeHtml(shortTime)}</button>
+    </p>
+  `;
+}
+
+function renderCommentMeta(comment: Extract<HNFeedItem, { type: "comment" }>, by: string, shortTime: string, fullTime: string): string {
+  return `
+    <p class="deck-card__meta">
+      <a href="${escapeAttr(hnPermalink(comment.id))}" target="_blank" rel="noopener noreferrer">comment thread</a>
+      ${comment.parent ? `<span>·</span><a href="${escapeAttr(hnPermalink(comment.parent))}" target="_blank" rel="noopener noreferrer">parent</a>` : ""}
+      <span>·</span>
+      <span>by <a href="${escapeAttr(hnUserUrl(by))}" target="_blank" rel="noopener noreferrer">${escapeHtml(by)}</a></span>
+      <span>·</span>
+      <button class="deck-card__time" type="button" data-short="${escapeAttr(shortTime)}" data-full="${escapeAttr(fullTime)}" title="${escapeAttr(fullTime)}">${escapeHtml(shortTime)}</button>
+    </p>
+  `;
+}
+
 function editColumn(state: AppState, dom: DOM, id: string): void {
   openColumnDialog(state, dom, id);
 }
@@ -1203,6 +1342,65 @@ function moveColumnInDeck(state: AppState, dom: DOM, id: string, direction: -1 |
   state.deck = moveColumn(state.deck, id, direction);
   queuePersistState(state);
   renderDeck(state, dom);
+}
+
+function bindColumnDragEvents(state: AppState, dom: DOM, runtime: ColumnRuntime): void {
+  runtime.el.addEventListener("dragstart", (ev) => {
+    ev.dataTransfer?.setData("text/plain", runtime.column.id);
+    ev.dataTransfer && (ev.dataTransfer.effectAllowed = "move");
+    runtime.el.classList.add("deck-column--dragging");
+  });
+  runtime.el.addEventListener("dragend", () => {
+    runtime.el.classList.remove("deck-column--dragging");
+    clearColumnDropPlaceholder();
+  });
+  runtime.el.addEventListener("dragover", (ev) => {
+    ev.preventDefault();
+    ev.dataTransfer && (ev.dataTransfer.dropEffect = "move");
+    const sourceId = ev.dataTransfer?.getData("text/plain");
+    if (!sourceId || sourceId === runtime.column.id) return;
+    showColumnDropPlaceholder(dom, runtime.el, columnDropPosition(ev, runtime.el));
+  });
+  runtime.el.addEventListener("drop", (ev) => {
+    ev.preventDefault();
+    const sourceId = ev.dataTransfer?.getData("text/plain");
+    if (!sourceId || sourceId === runtime.column.id) return;
+    state.deck = reorderColumn(state.deck, sourceId, runtime.column.id, columnDropPosition(ev, runtime.el));
+    clearColumnDropPlaceholder();
+    queuePersistState(state);
+    renderDeck(state, dom);
+  });
+}
+
+function columnDropPosition(ev: DragEvent, target: HTMLElement): "before" | "after" {
+  const rect = target.getBoundingClientRect();
+  return ev.clientX >= rect.left + rect.width / 2 ? "after" : "before";
+}
+
+function showColumnDropPlaceholder(dom: DOM, target: HTMLElement, position: "before" | "after"): void {
+  const existing = document.getElementById(DROP_PLACEHOLDER_ID);
+  const placeholder = existing ?? document.createElement("section");
+  placeholder.id = DROP_PLACEHOLDER_ID;
+  placeholder.className = "deck-column-drop-placeholder";
+  placeholder.setAttribute("aria-hidden", "true");
+  if (position === "before") dom.deck.insertBefore(placeholder, target);
+  else dom.deck.insertBefore(placeholder, target.nextSibling);
+}
+
+function clearColumnDropPlaceholder(): void {
+  document.getElementById(DROP_PLACEHOLDER_ID)?.remove();
+}
+
+function reorderColumn(deck: Deck, sourceId: string, targetId: string, position: "before" | "after"): Deck {
+  const columns = deck.columns.map((c) => ({ ...c }));
+  const sourceIndex = columns.findIndex((c) => c.id === sourceId);
+  const targetIndex = columns.findIndex((c) => c.id === targetId);
+  if (sourceIndex < 0 || targetIndex < 0) return deck;
+  const [source] = columns.splice(sourceIndex, 1);
+  let adjustedTarget = sourceIndex < targetIndex ? targetIndex - 1 : targetIndex;
+  if (position === "after") adjustedTarget += 1;
+  columns.splice(adjustedTarget, 0, source);
+  return { columns };
 }
 
 function openColumnDialog(state: AppState, dom: DOM, id: string | null): void {
@@ -1217,7 +1415,8 @@ function openColumnDialog(state: AppState, dom: DOM, id: string | null): void {
       : col?.feed === "best-month"
         ? col.feedMonth ?? new Date().toISOString().slice(0, 7)
         : rawPredicateText(col?.feed ?? "top");
-  syncColumnPredicateState(dom);
+  dom.columnFilter.value = col?.filter ?? "";
+  syncColumnKindState(dom, false);
   if (typeof dom.columnDialog.showModal === "function") dom.columnDialog.showModal();
   else dom.columnDialog.setAttribute("open", "");
 }
@@ -1231,13 +1430,16 @@ function saveColumnDialog(state: AppState, dom: DOM): void {
   const title = dom.columnTitle.value.trim();
   if (!title) return;
   const kind = dom.columnKind.value;
+  const editingId = state.editingColumnId;
+  const previous = editingId ? state.deck.columns.find((c) => c.id === editingId) : null;
+  const filter = dom.columnFilter.value.trim() || undefined;
   const next: Omit<Column, "id"> =
     kind === "top" || kind === "new" || kind === "ask" || kind === "show"
-      ? { kind: "raw", title, feed: kind, feedUser: undefined, feedMonth: undefined, description: undefined }
+      ? { kind: "raw", title, feed: kind, feedUser: undefined, feedMonth: undefined, filter, description: undefined }
       : kind === "user"
-        ? { kind: "raw", title, feed: "user", feedUser: dom.columnPredicate.value.trim(), feedMonth: undefined, description: undefined }
+        ? { kind: "raw", title, feed: "user", feedUser: dom.columnPredicate.value.trim(), feedMonth: undefined, filter, description: undefined }
       : kind === "best-month"
-        ? { kind: "raw", title, feed: "best-month", feedMonth: dom.columnPredicate.value.trim() || new Date().toISOString().slice(0, 7), feedUser: undefined, description: undefined }
+        ? { kind: "raw", title, feed: "best-month", feedMonth: dom.columnPredicate.value.trim() || new Date().toISOString().slice(0, 7), feedUser: undefined, filter, description: undefined }
       : {
           kind: "curated",
           title,
@@ -1245,12 +1447,15 @@ function saveColumnDialog(state: AppState, dom: DOM): void {
           feed: undefined,
           feedUser: undefined,
           feedMonth: undefined,
+          filter: undefined,
         };
-  if (state.editingColumnId) {
-    state.deck = updateColumn(state.deck, state.editingColumnId, next);
+  if (editingId) {
+    state.deck = updateColumn(state.deck, editingId, next);
   } else {
     state.deck = addColumn(state.deck, { ...next, id: newColumnId() });
   }
+  if (previous?.kind === "curated" || next.kind === "curated") resetCuratedRoutingCache(state);
+  else if (editingId) state.columnItems.delete(editingId);
   queuePersistState(state);
   closeColumnDialog(state, dom);
   renderDeck(state, dom);
@@ -1259,13 +1464,38 @@ function saveColumnDialog(state: AppState, dom: DOM): void {
   }
 }
 
-function syncColumnPredicateState(dom: DOM): void {
+function resetCuratedRoutingCache(state: AppState): void {
+  state.routingCursor = 0;
+  for (const column of state.deck.columns) {
+    if (column.kind === "curated") state.columnItems.delete(column.id);
+  }
+}
+
+function syncColumnKindState(dom: DOM, updateTitle: boolean): void {
   const isCustom = dom.columnKind.value === "custom";
   const needsParam = dom.columnKind.value === "user" || dom.columnKind.value === "best-month";
   dom.columnPredicate.disabled = !isCustom && !needsParam;
+  dom.columnFilter.disabled = isCustom;
+  if (updateTitle) dom.columnTitle.value = defaultColumnTitle(dom.columnKind.value);
   if (!isCustom && !needsParam) dom.columnPredicate.value = rawPredicateText(dom.columnKind.value);
+  if (dom.columnKind.value === "user" && (updateTitle || !dom.columnPredicate.value.trim())) {
+    dom.columnPredicate.value = "hacker";
+  }
   if (dom.columnKind.value === "best-month" && !dom.columnPredicate.value.trim()) {
     dom.columnPredicate.value = new Date().toISOString().slice(0, 7);
+  }
+}
+
+function defaultColumnTitle(kind: string): string {
+  switch (kind) {
+    case "new": return "New";
+    case "ask": return "Ask";
+    case "show": return "Show";
+    case "user": return "hacker";
+    case "best-month": return "Best this month";
+    case "custom": return "Funny";
+    case "top":
+    default: return "Top";
   }
 }
 
@@ -1274,7 +1504,7 @@ function rawPredicateText(feed: string): string {
     case "new": return "Built-in Hacker News feed: newest stories.";
     case "ask": return "Built-in Hacker News feed: Ask HN discussions.";
     case "show": return "Built-in Hacker News feed: Show HN projects.";
-    case "user": return "HN username";
+    case "user": return "hacker";
     case "best-month": return "YYYY-MM";
     case "top":
     default: return "Built-in Hacker News feed: top stories.";
@@ -1468,10 +1698,13 @@ function observeDOMSnapshotChanges(state: AppState, baseline: DOMBaseline): void
 
 function deckStructureMatchesState(state: AppState, dom: DOM): boolean {
   const children = Array.from(dom.deck.children);
+  const allowed = children.every((el) =>
+    el instanceof HTMLElement && (el.classList.contains("deck-column") || el.id === DROP_PLACEHOLDER_ID),
+  );
+  if (!allowed) return false;
   const columns = children.filter(
     (el): el is HTMLElement => el instanceof HTMLElement && el.classList.contains("deck-column"),
   );
-  if (children.length !== columns.length) return false;
   if (columns.length !== state.deck.columns.length) return false;
   return columns.every((el, index) => el.dataset.columnId === state.deck.columns[index]?.id);
 }
@@ -1533,10 +1766,8 @@ function exposeOperationalConsoleAPI(state: AppState): void {
     resetLayout: () => resetPersistedState(),
     state: () => ({
       deck: structuredClone(state.deck),
-      readerContext: state.readerContext,
-      sessionPrompt: state.sessionPrompt,
-      autoReloadMs: state.autoReloadMs,
-      autoReloadEnabled: state.autoReloadEnabled,
+      routingInstructions: state.routingInstructions,
+      uiSize: state.uiSize,
       mastheadTitle: state.mastheadTitle,
       mastheadSubtitle: state.mastheadSubtitle,
       customCSSLength: state.customCSS.length,

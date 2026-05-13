@@ -39,6 +39,18 @@ export interface HNStory {
   kids?: number[];
 }
 
+export interface HNComment {
+  id: number;
+  type: "comment";
+  by: string;
+  time: number;
+  text: string;
+  parent?: number;
+  kids?: number[];
+}
+
+export type HNFeedItem = HNStory | HNComment;
+
 export type HNFeed = "top" | "new" | "ask" | "show" | "user" | "best-month";
 
 export interface HNFeedOptions {
@@ -51,17 +63,17 @@ export interface HNFeedOptions {
 /** A non-story item — surfaced from /item but filtered out for the briefing. */
 interface HNNonStory {
   id: number;
-  type: "comment" | "job" | "poll" | "pollopt";
+  type: "job" | "poll" | "pollopt";
   [k: string]: unknown;
 }
 
-type HNAnyItem = HNStory | HNNonStory;
+type HNAnyItem = HNFeedItem | HNNonStory;
 
 const BASE = "https://hacker-news.firebaseio.com/v0";
 
 /** In-memory per-session cache; the Firebase endpoint is fast but
  *  we still avoid the 200ms round-trip when re-rendering. */
-const itemCache = new Map<number, HNStory | null>();
+const itemCache = new Map<number, HNFeedItem | null>();
 
 /**
  * Cached top-stories id list. Refetched only when explicitly
@@ -134,7 +146,7 @@ export function clearHNCache(): void {
  * (comment / job / poll) or is dead/deleted — those are not useful
  * for a story briefing.
  */
-export async function fetchItem(id: number, signal?: AbortSignal): Promise<HNStory | null> {
+export async function fetchItem(id: number, signal?: AbortSignal): Promise<HNFeedItem | null> {
   if (itemCache.has(id)) return itemCache.get(id) ?? null;
   const r = await fetch(`${BASE}/item/${id}.json`, { signal });
   if (!r.ok) {
@@ -142,9 +154,9 @@ export async function fetchItem(id: number, signal?: AbortSignal): Promise<HNSto
     return null;
   }
   const raw = (await r.json()) as HNAnyItem | null;
-  const story = normalizeStory(raw);
-  itemCache.set(id, story);
-  return story;
+  const item = normalizeItem(raw);
+  itemCache.set(id, item);
+  return item;
 }
 
 /**
@@ -167,8 +179,8 @@ export async function fetchTopStories(
  * size of the upstream id list, so the caller can decide whether
  * there's more to load.
  */
-export interface BatchResult {
-  stories: HNStory[];
+export interface BatchResult<T extends HNFeedItem = HNFeedItem> {
+  stories: T[];
   /** Total number of ids in the current top-stories list. */
   total: number;
   /** Whether more stories exist past the returned slice. */
@@ -198,8 +210,9 @@ export async function fetchTopStoryBatch(
   start: number,
   end: number,
   signal?: AbortSignal,
-): Promise<BatchResult> {
-  return fetchFeedStoryBatch("top", start, end, signal);
+): Promise<BatchResult<HNStory>> {
+  const result = await fetchFeedStoryBatch("top", start, end, signal);
+  return { ...result, stories: result.stories.filter(isHNStory) };
 }
 
 export async function fetchFeedStoryBatch(
@@ -219,7 +232,7 @@ export async function fetchFeedStoryBatch(
   const slice = ids.slice(clampedStart, clampedEnd);
   const items = await Promise.all(slice.map((id) => fetchItem(id, signal)));
   return {
-    stories: items.filter((it): it is HNStory => it !== null),
+    stories: items.filter((it): it is HNFeedItem => it !== null),
     total: ids.length,
     hasMore: clampedEnd < ids.length,
   };
@@ -299,6 +312,10 @@ function algoliaHitToStory(hit: AlgoliaHit): HNStory | null {
   };
 }
 
+export function isHNStory(item: HNFeedItem): item is HNStory {
+  return item.type === "story";
+}
+
 /** Strip HTML tags + decode the few entities HN actually emits. */
 export function stripHtml(html: string): string {
   return html
@@ -340,6 +357,10 @@ export function hnFromSiteUrl(host: string): string {
 
 // ─── Helpers ──────────────────────────────────────────────────────────
 
+function normalizeItem(raw: HNAnyItem | null): HNFeedItem | null {
+  return normalizeStory(raw) ?? normalizeComment(raw);
+}
+
 function normalizeStory(raw: HNAnyItem | null): HNStory | null {
   if (!raw || typeof raw !== "object") return null;
   if (raw.type !== "story") return null;
@@ -357,6 +378,24 @@ function normalizeStory(raw: HNAnyItem | null): HNStory | null {
     text: typeof r.text === "string" ? r.text : undefined,
     score: typeof r.score === "number" ? r.score : 0,
     descendants: typeof r.descendants === "number" ? r.descendants : 0,
+    kids: Array.isArray(r.kids) ? r.kids : undefined,
+  };
+}
+
+function normalizeComment(raw: HNAnyItem | null): HNComment | null {
+  if (!raw || typeof raw !== "object") return null;
+  if (raw.type !== "comment") return null;
+  if ("dead" in raw && raw.dead) return null;
+  if ("deleted" in raw && raw.deleted) return null;
+  const r = raw as HNComment;
+  if (typeof r.id !== "number" || typeof r.text !== "string") return null;
+  return {
+    id: r.id,
+    type: "comment",
+    by: r.by ?? "unknown",
+    time: typeof r.time === "number" ? r.time : 0,
+    text: r.text,
+    parent: typeof r.parent === "number" ? r.parent : undefined,
     kids: Array.isArray(r.kids) ? r.kids : undefined,
   };
 }

@@ -11,11 +11,9 @@
  *   "curated"  — populated by Nano's single routing pass.
  *
  * Routing model: one Nano session per batch. Nano receives the
- * reader's context, every curated column's `description`, and the
- * current batch of stories. It emits ops that *place* each story
- * into the best-fitting column, *drop* stories that don't fit
- * anywhere, optionally *cluster* related stories within a column, or
- * *note* a column-level observation.
+ * routing instructions, every curated column's `description`, and the
+ * current batch of stories. It emits positive placement ops only.
+ * Any story not placed in a curated column is ignored.
  *
  * The `description` is therefore not a literal prompt — it's the
  * job description Nano uses when deciding what belongs here.
@@ -40,6 +38,11 @@ export interface Column {
   feedUser?: string;
   /** Month in YYYY-MM for feed === "best-month". Empty = current month. */
   feedMonth?: string;
+  /** Optional raw-feed text filter. Matches title, author, URL, domain, or text. */
+  filter?: string;
+  /** Per-column auto-refresh. Defaults to enabled every 1 minute. */
+  autoReloadEnabled?: boolean;
+  autoReloadMs?: number;
   /**
    * What this column is for. Read by Nano to decide which stories to
    * route here. Empty/undefined on raw columns. Keep it short and
@@ -110,6 +113,9 @@ function isColumn(x: unknown): x is Column {
   }
   if (c.feedUser !== undefined && typeof c.feedUser !== "string") return false;
   if (c.feedMonth !== undefined && typeof c.feedMonth !== "string") return false;
+  if (c.filter !== undefined && typeof c.filter !== "string") return false;
+  if (c.autoReloadEnabled !== undefined && typeof c.autoReloadEnabled !== "boolean") return false;
+  if (c.autoReloadMs !== undefined && typeof c.autoReloadMs !== "number") return false;
   if (c.description !== undefined) {
     if (typeof c.description !== "string" || c.description.length > MAX_DESCRIPTION_LEN) return false;
   }

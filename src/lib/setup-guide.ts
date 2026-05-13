@@ -172,6 +172,7 @@ export function guideContentFor(reason: GuideReason): GuideContent {
           "Open <code>chrome://flags/#prompt-api-for-gemini-nano</code> and set it to <b>Enabled</b>.",
           "Click <b>Relaunch</b> at the bottom.",
           "Come back here, refresh the page, and click the <b>Begin</b> button.",
+          "If <code>chrome://on-device-internals</code> is missing, enable <code>chrome://flags/#internal-debugging-page-urls</code>, relaunch Chrome, then check <code>chrome://chrome-urls</code>.",
         ],
         verifyLink: {
           label: "Open chrome://on-device-internals",
@@ -189,6 +190,7 @@ export function guideContentFor(reason: GuideReason): GuideContent {
           "<b>GPU:</b> a discrete or integrated GPU with more than <b>4 GB VRAM</b>, OR a CPU with <b>16 GB RAM and 4+ cores</b>.",
           "<b>Network:</b> not on a metered/cellular connection (the one-time download is several GB).",
           "Open <code>chrome://on-device-internals</code> to see exactly which check failed.",
+          "If that page is hidden, enable <code>chrome://flags/#internal-debugging-page-urls</code>, relaunch Chrome, then open it from <code>chrome://chrome-urls</code>.",
           `<details><summary>Original error</summary><pre style="white-space:pre-wrap;font-size:11px;color:#9aa0a6;margin-top:6px;">${escapeHtml(reason.reason)}</pre></details>`,
         ],
         verifyLink: {

@@ -5,7 +5,7 @@ import type { HNStory } from "./hn-client";
 import { hostOf, stripHtml } from "./hn-client";
 
 export interface DeckPromptOptions {
-  readerContext: string;
+  routingInstructions: string;
   columns: Column[];
   stories: HNStory[];
   batchStart: number;
@@ -13,36 +13,38 @@ export interface DeckPromptOptions {
 
 export function buildDeckSystemPrompt(opts: DeckPromptOptions): string {
   const curated = opts.columns.filter((c) => c.kind === "curated");
-  const reader = opts.readerContext.trim()
-    ? opts.readerContext.trim()
-    : "No explicit reader context. Assume a technical HN reader; prefer useful details and avoid low-signal drama.";
+  const instructions = opts.routingInstructions.trim()
+    ? opts.routingInstructions.trim()
+    : "No explicit routing instructions. Assume a technical HN reader; prefer useful details and avoid low-signal drama.";
 
   return [
     "You are a private news editor. You route Hacker News stories into the reader's columns.",
     "Output ONLY deck.* function calls, one per line. No markdown. No prose.",
     "",
     "SDK:",
-    "  deck.place(\"columnId\", storyId, \"optional rewritten headline\" | null, \"why this story belongs here for THIS reader\")",
-    "  deck.drop(storyId, \"why it belongs nowhere\")",
-    "  deck.note(\"columnId\", \"short column-level observation\")",
+    "  deck.place(\"columnId\", storyId)",
+    "  deck.place(\"\", storyId) // story belongs in no custom column",
     "",
     "Rules:",
-    "  - Use only listed column ids and story ids.",
-    "  - No subgroups. Never call deck.cluster. Only place individual stories into columns.",
+    "  - Use only listed column ids, story ids, or the empty column id \"\" for no custom column.",
+    "  - Only emit deck.place calls. Do not emit explanations, markdown, JSON, notes, drops, or clusters.",
+    "  - Emit an explicit decision for EVERY story in the batch.",
+    "  - If a story matches no custom column, emit exactly deck.place(\"\", storyId).",
     "  - A story may belong to MULTIPLE columns. If it fits AI and Tools, place it in both.",
+    "  - If a story fits one or more columns, do not also emit deck.place(\"\", storyId).",
     "  - Do not repeat the same story twice inside one column.",
     "  - Emit calls in priority order within each column: most important first.",
     "  - Place useful stories generously. Do not output only 1-2 stories; a deck needs a backlog.",
-    "  - Aim to route most useful stories in the batch. Drop only stories that truly fit no curated column.",
-    "  - If a column is plausible for a story, place it there instead of dropping it.",
+    "  - Aim to route most useful stories in the batch.",
+    "  - If a column is plausible for a story, place it there.",
     "  - Try to use every curated column that has a plausible match in this batch.",
-    "  - Body text must be short (<=35 words) and explain why the reader should care.",
-    "  - If a story matches no column at all, drop it. Do not force-fit pure junk.",
+    "  - Do not rewrite headlines or explain why a story was placed.",
+    "  - If a story matches no column at all, mark it with the empty column id. Do not force-fit pure junk.",
     "  - If the same story fits multiple columns, place it in every useful column.",
     "  - Raw/front-page columns are not listed because they are filled without you.",
     "",
-    "READER CONTEXT:",
-    reader,
+    "ROUTING INSTRUCTIONS:",
+    instructions,
     "",
     "CURATED COLUMNS:",
     ...curated.map((c) => `  ${c.id}: ${c.title} — ${c.description ?? "No description"}`),
@@ -54,8 +56,10 @@ export function buildDeckSystemPrompt(opts: DeckPromptOptions): string {
   ].join("\n");
 }
 
-export function buildDeckUserPrompt(): string {
-  return "Route the stories now.";
+export function buildDeckUserPrompt(retry = false): string {
+  return retry
+    ? "Retry. Your previous response produced no valid decisions. Output one or more lines per story like deck.place(\"columnId\", 123), or deck.place(\"\", 123) for no column."
+    : "Route the stories now.";
 }
 
 function formatStory(s: HNStory): string {

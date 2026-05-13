@@ -25,7 +25,7 @@
       </div>
     </div>
 
-    <header class="topbar">
+    <header class="topbar" data-app-version="2">
       <div class="topbar__brand">
         <img class="topbar__logo" src="/favicon.svg?v=26" alt="HNDeck" />
         <div>
@@ -38,10 +38,6 @@
         </div>
       </div>
       <div class="topbar__actions">
-        <button id="reload-every-btn" class="topbar__btn" type="button">
-          <span aria-hidden="true">↻</span>
-          <span>Reload every 1m</span>
-        </button>
         <button id="add-column-btn" class="topbar__btn" type="button">
           <span aria-hidden="true">＋</span>
           <span>Column</span>
@@ -52,8 +48,15 @@
         </button>
         <button id="about-btn" class="topbar__btn" type="button" aria-haspopup="dialog">
           <span aria-hidden="true">ℹ</span>
-          <span>Why this exists</span>
+          <span>Why I built this</span>
         </button>
+        <a
+          id="github-link"
+          class="topbar__btn topbar__btn--small"
+          href="https://github.com/teamchong/hndeck"
+          target="_blank"
+          rel="noopener noreferrer"
+        >GitHub ↗</a>
       </div>
     </header>
 
@@ -104,17 +107,11 @@
       </a>
     </footer>
 
-    <!-- ─── About / "Why this exists" dialog ──────────────────────────
-         Opens from the topbar button. Holds the thesis hed, the
-         today-vs-agentic diagram, and the longer "why I built this"
-         text. Uses the native <dialog> element so ESC + backdrop
-         dismiss come for free. -->
+    <!-- ─── About / "Why I built this" dialog ───────────────────────── -->
     <dialog id="about-dialog" class="about-dialog">
       <article class="about-dialog__panel">
         <header class="about-dialog__header">
-          <h2 class="about-dialog__hed">
-            Define columns in plain English. Nano routes stories into them, on-device, free, offline. Your column definitions never leave your browser.
-          </h2>
+          <h2 class="about-dialog__hed">Why I built this</h2>
           <button
             id="about-close"
             class="about-dialog__close"
@@ -123,94 +120,36 @@
           >×</button>
         </header>
 
-        <div class="thesis-diagram" aria-label="Today vs. agentic era">
-          <div class="thesis-diagram__panel">
-            <div class="thesis-diagram__label">Today</div>
-            <div class="thesis-diagram__step">news.ycombinator.com</div>
-            <div class="thesis-diagram__arrow" aria-hidden="true">↓</div>
-            <div class="thesis-diagram__step">30 raw stories</div>
-            <div class="thesis-diagram__arrow" aria-hidden="true">↓</div>
-            <div class="thesis-diagram__step">You scan, decide what to click</div>
-            <div class="thesis-diagram__arrow" aria-hidden="true">↓</div>
-            <div class="thesis-diagram__step thesis-diagram__step--you">You read</div>
-          </div>
-
-          <div class="thesis-diagram__panel">
-            <div class="thesis-diagram__label thesis-diagram__label--accent">Agentic era</div>
-            <div class="thesis-diagram__step">news.ycombinator.com</div>
-            <div class="thesis-diagram__arrow" aria-hidden="true">↓</div>
-            <div class="thesis-diagram__step thesis-diagram__step--agent">
-              <span class="thesis-diagram__step-main">Your agent</span>
-              <span class="thesis-diagram__step-sub">Nano + your private context</span>
-            </div>
-            <div class="thesis-diagram__arrow" aria-hidden="true">↓</div>
-            <div class="thesis-diagram__step thesis-diagram__step--out">Personalized briefing</div>
-            <div class="thesis-diagram__arrow" aria-hidden="true">↓</div>
-            <div class="thesis-diagram__step thesis-diagram__step--you">You read</div>
-          </div>
-        </div>
-
         <p class="about-dialog__caption">
-          Same source on both sides. On the right, a small on-device model
-          re-shapes it into a view that's actually for you. Your context
-          never leaves the device. The original source is one tap away.
+          Like many people, I noticed Chrome had downloaded the Gemini Nano
+          model and it was taking a few GB of disk space. Since it was already
+          sitting there, I wanted to see if I could build something useful
+          with it.
         </p>
 
         <div class="about-dialog__body">
           <p>
-            <strong>Gemini Nano</strong> is the on-device language model
-            Chrome ships in your browser. The reception has been chilly —
-            the dev forums have a steady drumbeat of <em>"it can barely
-            follow instructions,"</em> <em>"why does this exist,"</em>
-            <em>"I'd rather just call gpt-4o-mini."</em> That criticism is
-            mostly fair.
+            I tried a few ideas. This is the one I ended up liking: local AI
+            that reads Hacker News through my own preferences and turns it
+            into columns I actually want to scan.
           </p>
           <p>
-            I have a working <strong>prompt → Excalidraw</strong> demo
-            built on bigger cloud-hosted models — the pattern handles code
-            generation and structured output reliably. I wired Nano up to
-            the same pattern and it fell over. Two reasons, both legitimate:
-            the model itself is much smaller, and Chrome's Prompt API
-            <strong>doesn't expose grammar-constrained decoding</strong>,
-            so there's no rail keeping the model on-spec. When Nano
-            hallucinates a missing quote or bracket, the whole call
-            collapses. Worse model and weaker decoder — fewer guard-rails
-            on both axes.
+            The column prompts stay local. Nano routes stories in the browser.
+            It is not trying to write the whole app or replace HN. It just
+            helps decide what belongs where.
           </p>
           <p>
-            <strong>But Nano is already here.</strong> It's installed in
-            your browser. It runs free, runs offline, doesn't leak your
-            prompts to anyone's server. So the question stopped being
-            "what would I use a real model for" and started being: what is
-            a small model in your browser <em>uniquely</em> good at?
-          </p>
-          <p>
-            This page is my attempt at an answer. Not "Nano generates the
-            world" — that's the failure mode. Instead:
-            <strong>Nano reads a small batch of items and writes you a
-            short, personalized note about them.</strong> A small job for
-            a small model. And it happens to be a preview of how every
-            webpage will look in the agentic era.
-          </p>
-          <p class="about-dialog__caveat">
-            This is a demo, not a product. Expect rough edges. The model
-            is small; it sometimes misranks, sometimes hallucinates an
-            item id (caught and dropped), sometimes the prose is generic.
-            That's the point. We're not pretending Nano is GPT-4 — we're
-            showing what a Nano-sized agent can usefully do on a webpage
-            today, with the model that already lives in your browser.
+            I also wanted the page itself to be easy to make your own. Open
+            DevTools, edit the HTML, CSS, or DOM however you like, and HNDeck
+            will persist the page snapshot. On reload it restores your changes
+            and then reapplies the app-owned deck state.
           </p>
         </div>
       </article>
     </dialog>
 
-    <!-- ─── Customize dialog ──────────────────────────────────────────
-         Holds the reader-context textarea and the today's-directive
-         input. Opened from the topbar Customize button.
-         The inputs are auto-saved to OPFS on every keystroke,
-         so there's no explicit "save"
-         action — closing the dialog is enough. -->
-    <dialog id="editor-dialog" class="about-dialog">
+    <!-- ─── Customize dialog ────────────────────────────────────────── -->
+    <dialog id="editor-dialog" class="about-dialog" data-app-version="2">
       <article class="about-dialog__panel">
         <header class="about-dialog__header">
           <h2 class="about-dialog__hed">Customize</h2>
@@ -233,37 +172,26 @@
         </p>
 
         <div class="editor-form">
-          <label class="editor-form__label" for="reader-context">
-            <span>Tell your editor about you</span>
+          <label class="editor-form__label" for="routing-instructions">
+            <span>Routing instructions</span>
             <span class="editor-form__hint">
-              Be specific. The more your editor knows that you'd never
-              paste into ChatGPT, the more useful it is.
+              Included in every Nano routing prompt. Tell HNDeck what to
+              prioritize, skip, and how to sort stories.
             </span>
           </label>
           <textarea
-            id="reader-context"
+            id="routing-instructions"
             class="editor-form__textarea"
             rows="8"
-            placeholder="e.g. backend engineer, learning Rust, exploring distributed systems and CRDTs, skip crypto and LLM-benchmark posts, surface Postgres-internals deep dives. I'm prepping for system-design interviews so infra deep-dives are gold."
+            placeholder="e.g. Prioritize deep technical posts, infra, databases, browser internals, and practical tools. Skip crypto drama, generic AI takes, and hiring posts. Put funny low-stakes stories in Funny only if they are actually amusing."
             disabled
           ></textarea>
-
-          <label class="editor-form__label" for="session-prompt">
-            <span>Today's directive</span>
-            <span class="editor-form__hint">
-              Optional. One-off note for the next briefing only.
-            </span>
-          </label>
-          <input
-            id="session-prompt"
-            class="editor-form__input"
-            type="text"
-            placeholder="e.g. lean tools-heavy today; skip the drama"
-            disabled
-          />
         </div>
 
         <div class="editor-form__footer">
+          <button id="ui-size-btn" class="editor-form__btn" type="button">
+            UI size: Normal
+          </button>
           <button id="reset-state" class="editor-form__btn editor-form__btn--danger" type="button">
             Reset layout
           </button>
@@ -275,7 +203,7 @@
     </dialog>
 
     <!-- ─── Per-column settings dialog ─────────────────────────────── -->
-    <dialog id="column-dialog" class="about-dialog">
+    <dialog id="column-dialog" class="about-dialog" data-app-version="3">
       <article class="about-dialog__panel">
         <header class="about-dialog__header">
           <h2 class="about-dialog__hed">Column settings</h2>
@@ -294,16 +222,6 @@
         </p>
 
         <div class="editor-form">
-          <label class="editor-form__label" for="column-title">
-            <span>Title</span>
-          </label>
-          <input
-            id="column-title"
-            class="editor-form__input"
-            type="text"
-            placeholder="e.g. Tools, AI, Funny"
-          />
-
           <label class="editor-form__label" for="column-kind">
             <span>Predicate / source</span>
           </label>
@@ -317,6 +235,16 @@
             <option value="custom">Custom Nano prompt</option>
           </select>
 
+          <label class="editor-form__label" for="column-title">
+            <span>Title</span>
+          </label>
+          <input
+            id="column-title"
+            class="editor-form__input"
+            type="text"
+            placeholder="e.g. Tools, AI, Funny"
+          />
+
           <label class="editor-form__label" for="column-predicate">
             <span>Prompt / predicate</span>
             <span class="editor-form__hint">
@@ -329,6 +257,19 @@
             rows="5"
             placeholder="Funny, pg, 2026-05, or a custom routing prompt"
           ></textarea>
+
+          <label class="editor-form__label" for="column-filter">
+            <span>Filter</span>
+            <span class="editor-form__hint">
+              Optional text filter for raw/source columns. Matches title, URL, domain, author, or post text.
+            </span>
+          </label>
+          <input
+            id="column-filter"
+            class="editor-form__input"
+            type="text"
+            placeholder="e.g. rust database postgres"
+          />
         </div>
 
         <div class="editor-form__footer">
@@ -399,7 +340,10 @@
         --font-display: "Playfair Display", "Iowan Old Style",
           Georgia, "Times New Roman", serif;
         --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+        --ui-zoom: 1;
       }
+      html[data-ui-size="compact"] { --ui-zoom: 0.9; }
+      html[data-ui-size="large"] { --ui-zoom: 1.12; }
       * { box-sizing: border-box; }
       html, body {
         margin: 0; padding: 0;
@@ -414,6 +358,7 @@
           radial-gradient(rgba(0, 0, 0, 0.025) 1px, transparent 1px);
         background-size: 3px 3px;
       }
+      body { zoom: var(--ui-zoom); }
       code, pre { font-family: var(--font-mono); }
       a { color: var(--orange); text-decoration-thickness: 1px; }
       a:hover { text-decoration: underline; }
@@ -528,6 +473,11 @@
         background: #fff0d6; color: var(--orange);
         border-color: var(--orange);
       }
+      .topbar__btn--small {
+        padding: 6px 12px;
+        font-size: 12px;
+        text-decoration: none;
+      }
       .topbar__btn--primary {
         background: var(--fg); color: var(--bg-2);
         border-color: var(--fg);
@@ -541,7 +491,7 @@
         width: 100%;
         max-width: none;
         margin: 0;
-        padding: 24px 16px 48px;
+        padding: 24px 16px 0;
       }
 
       /* ─── Thesis diagram (used inside the About dialog) ────── */
@@ -692,6 +642,20 @@
       .deck:not(.deck--overflowing):not(.deck--focused) .deck-column:last-child {
         flex-grow: 1;
       }
+      @media (max-width: 760px) {
+        .topbar { padding: 22px 18px 16px; }
+        .topbar__actions { width: 100%; }
+        .deck {
+          gap: 10px;
+          scroll-snap-type: x mandatory;
+        }
+        .deck-column {
+          flex-basis: calc(100vw - 32px);
+          min-width: calc(100vw - 32px);
+          height: calc(100vh - 260px);
+          min-height: 520px;
+        }
+      }
       .deck-column--routing {
         box-shadow: inset 0 0 0 2px rgba(255, 102, 0, 0.18);
       }
@@ -702,6 +666,28 @@
         flex: 1 1 100%;
         max-width: none;
         z-index: 2;
+      }
+      .deck-column--dragging {
+        opacity: 0.55;
+        outline: 2px dashed var(--orange);
+        outline-offset: -4px;
+      }
+      .deck-column-drop-placeholder {
+        flex: 0 0 clamp(320px, 26vw, 420px);
+        height: calc(100vh - 245px);
+        min-height: 560px;
+        border: 2px dashed var(--orange);
+        border-radius: 6px;
+        background: rgba(255, 102, 0, 0.045);
+        pointer-events: none;
+      }
+      @media (max-width: 760px) {
+        .deck-column-drop-placeholder {
+          flex-basis: calc(100vw - 32px);
+          min-width: calc(100vw - 32px);
+          height: calc(100vh - 260px);
+          min-height: 520px;
+        }
       }
       .deck-column--focused .deck-column__btn--edit {
         display: none;
@@ -753,6 +739,7 @@
         color: var(--orange);
       }
       .deck-column__top-status {
+        position: relative;
         padding: 7px 14px;
         border-bottom: 1px solid var(--border);
         background: var(--bg-tint);
@@ -761,6 +748,23 @@
         font-size: 11px;
         text-transform: uppercase;
         letter-spacing: 0.7px;
+        overflow: hidden;
+        min-height: 30px;
+        transition: background-color 0.18s ease, color 0.18s ease;
+      }
+      .deck-column__top-status--ready,
+      .deck-column__top-status--loading {
+        color: var(--fg);
+        background: rgba(255, 102, 0, 0.13);
+      }
+      .deck-column__top-progress {
+        position: absolute;
+        left: 0;
+        bottom: 0;
+        height: 2px;
+        background: var(--orange);
+        opacity: 0.68;
+        transition: width 0.12s ease-out;
       }
       .deck-column__top-status[hidden] { display: none; }
       .deck-column__body {
@@ -791,8 +795,7 @@
       @keyframes deck-spin {
         to { transform: rotate(360deg); }
       }
-      .deck-empty,
-      .deck-note {
+      .deck-empty {
         margin: 0 0 14px;
         padding: 12px;
         background: var(--bg-tint);
@@ -800,6 +803,11 @@
         color: var(--fg-mid);
         font-size: 13.5px;
         line-height: 1.45;
+      }
+      .deck-empty--error {
+        background: rgba(160, 25, 39, 0.08);
+        border-left-color: var(--red);
+        color: var(--red);
       }
       .deck-card {
         position: relative;
@@ -942,7 +950,8 @@
         opacity: 0.55; cursor: not-allowed;
       }
       .editor-form__footer {
-        display: flex; justify-content: flex-end; margin-top: 16px;
+        display: flex; justify-content: flex-end; gap: 12px; margin-top: 16px;
+        flex-wrap: wrap;
       }
       .editor-form__btn {
         background: var(--bg); color: var(--fg);
