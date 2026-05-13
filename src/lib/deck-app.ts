@@ -123,6 +123,7 @@ interface AppState {
   uiSize: UISize;
   focusedColumnId: string | null;
   editingColumnId: string | null;
+  draggingColumnId: string | null;
   mastheadTitle: string;
   mastheadSubtitle: string;
   mastheadTitleVisible: boolean;
@@ -199,6 +200,7 @@ async function startDeckAppAsync(): Promise<void> {
     uiSize: persisted?.uiSize ?? "normal",
     focusedColumnId: null,
     editingColumnId: null,
+    draggingColumnId: null,
     mastheadTitle: persisted?.mastheadTitle ?? readMastheadTitle(),
     mastheadSubtitle: persisted?.mastheadSubtitle ?? readMastheadSubtitle(),
     mastheadTitleVisible: persisted?.mastheadTitleVisible ?? true,
@@ -644,17 +646,19 @@ function renderDeck(state: AppState, dom: DOM): void {
       resetColumnAutoReloadTimer(state, dom, runtime);
       if (body.scrollTop + body.clientHeight >= body.scrollHeight - 240) {
         if (column.kind === "raw") void loadRawBatch(state, runtime);
-        else void routeUntilFilled(state, dom);
+        else void routeNextBatch(state, dom);
       }
     });
     body.addEventListener("wheel", (ev) => {
       resetColumnAutoReloadTimer(state, dom, runtime);
       if (body.scrollTop <= 0 && ev.deltaY < 0) {
         runtime.topPull += Math.abs(ev.deltaY);
+        const readyToRefresh = runtime.topPull >= 80;
         runtime.topStatus.hidden = false;
-        runtime.topStatus.classList.toggle("deck-column__top-status--ready", runtime.topPull >= 80);
+        runtime.topStatus.classList.toggle("deck-column__top-status--ready", readyToRefresh);
+        runtime.topStatus.classList.toggle("deck-column__top-status--loading", readyToRefresh);
         runtime.topStatus.innerHTML = `
-          <span>${runtime.topPull >= 80 ? "Release to refresh" : "Pull to refresh"}</span>
+          <span><span class="deck-spinner" aria-hidden="true"></span>${readyToRefresh ? "Refreshing…" : "Pull to refresh"}</span>
           <span class="deck-column__top-progress" style="width:${Math.min(100, Math.round((runtime.topPull / 80) * 100))}%"></span>
         `;
         if (runtime.topPullReset !== null) window.clearTimeout(runtime.topPullReset);
@@ -662,7 +666,7 @@ function renderDeck(state: AppState, dom: DOM): void {
           runtime.topPull = 0;
           if (!runtime.topRefreshing) hideTopStatus(runtime);
         }, 650);
-        if (runtime.topPull >= 80) {
+        if (readyToRefresh) {
           runtime.topPull = 0;
           void refreshColumnFromTop(state, dom, runtime);
         }
@@ -678,9 +682,10 @@ function renderDeck(state: AppState, dom: DOM): void {
     } else if (getColumnItems(state, column.id).length === 0) {
       renderCuratedEmpty(runtime);
     }
-    bindColumnDragEvents(state, dom, runtime);
+    bindColumnDragEvents(state, runtime);
     scheduleColumnAutoReload(state, dom, runtime);
   }
+  bindDeckDragPreview(state, dom);
   applyFocusState(state, dom);
   updateDeckOverflowState(dom);
 }
@@ -726,7 +731,7 @@ function clearColumnMessage(runtime: ColumnRuntime): void {
 async function loadRawBatch(state: AppState, runtime: ColumnRuntime): Promise<void> {
   if (runtime.loading || !runtime.hasMore) return;
   runtime.loading = true;
-  runtime.sentinel.textContent = "Loading more…";
+  runtime.sentinel.innerHTML = `<span class="deck-spinner" aria-hidden="true"></span> Loading more…`;
   renderRawColumnWaitingMessage(state, runtime);
   try {
     let added = 0;
@@ -1044,11 +1049,19 @@ async function routeOneBatch(
   const routingInstructions = dom.instructionsBox.value.trim();
 
   let decisions = 0;
+  let placements = 0;
   try {
     for (let attempt = 0; attempt < 2; attempt++) {
       const sink: DeckSink = {
         enqueue(action) {
-          if (renderDeckAction(state, action)) decisions++;
+          if (action.columnId === "") {
+            if (state.storyById.has(action.storyId)) decisions++;
+            return;
+          }
+          if (renderDeckAction(state, action)) {
+            decisions++;
+            placements++;
+          }
         },
         onSkip(reason) {
           console.warn("[deck] skipped", reason);
@@ -1066,6 +1079,11 @@ async function routeOneBatch(
       if (!silent) setStatus(dom, "Nano returned no valid decisions. Retrying once…");
     }
     state.routingCursor += BATCH;
+    if (placements === 0) {
+      for (const rt of state.columns.values()) {
+        if (rt.column.kind === "curated") rt.sentinel.textContent = batch.hasMore ? "No matches in latest batch; scroll for older" : "HN exhausted";
+      }
+    }
     return batch.hasMore;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -1219,7 +1237,6 @@ function setRoutingVisuals(state: AppState, active: boolean): void {
 }
 
 function renderDeckAction(state: AppState, action: DeckAction): boolean {
-  if (action.columnId === "") return state.storyById.has(action.storyId);
   const rt = state.columns.get(action.columnId);
   if (!rt) return false;
   const story = state.storyById.get(action.storyId);
@@ -1499,36 +1516,61 @@ function moveColumnInDeck(state: AppState, dom: DOM, id: string, direction: -1 |
   renderDeck(state, dom);
 }
 
-function bindColumnDragEvents(state: AppState, dom: DOM, runtime: ColumnRuntime): void {
+function bindColumnDragEvents(state: AppState, runtime: ColumnRuntime): void {
   runtime.el.addEventListener("dragstart", (ev) => {
     if (!isColumnDragHandle(ev.target, runtime.el)) {
       ev.preventDefault();
       return;
     }
+    state.draggingColumnId = runtime.column.id;
     ev.dataTransfer?.setData("text/plain", runtime.column.id);
     ev.dataTransfer && (ev.dataTransfer.effectAllowed = "move");
     runtime.el.classList.add("deck-column--dragging");
   });
   runtime.el.addEventListener("dragend", () => {
+    state.draggingColumnId = null;
     runtime.el.classList.remove("deck-column--dragging");
     clearColumnDropPlaceholder();
   });
-  runtime.el.addEventListener("dragover", (ev) => {
+}
+
+function bindDeckDragPreview(state: AppState, dom: DOM): void {
+  dom.deck.ondragover = (ev) => {
+    const sourceId = state.draggingColumnId;
+    if (!sourceId) return;
     ev.preventDefault();
     ev.dataTransfer && (ev.dataTransfer.dropEffect = "move");
-    const sourceId = ev.dataTransfer?.getData("text/plain");
-    if (!sourceId || sourceId === runtime.column.id) return;
-    showColumnDropPlaceholder(dom, runtime.el, columnDropPosition(ev, runtime.el));
-  });
-  runtime.el.addEventListener("drop", (ev) => {
+    const target = findColumnDropTarget(dom, sourceId, ev.clientX);
+    if (target) showColumnDropPlaceholder(dom, target.el, target.position);
+  };
+  dom.deck.ondrop = (ev) => {
+    const sourceId = state.draggingColumnId;
+    if (!sourceId) return;
     ev.preventDefault();
-    const sourceId = ev.dataTransfer?.getData("text/plain");
-    if (!sourceId || sourceId === runtime.column.id) return;
-    state.deck = reorderColumn(state.deck, sourceId, runtime.column.id, columnDropPosition(ev, runtime.el));
+    const target = findColumnDropTarget(dom, sourceId, ev.clientX);
+    state.draggingColumnId = null;
     clearColumnDropPlaceholder();
+    if (!target || sourceId === target.el.dataset.columnId) return;
+    state.deck = reorderColumn(state.deck, sourceId, target.el.dataset.columnId ?? "", target.position);
     queuePersistState(state);
     renderDeck(state, dom);
-  });
+  };
+  dom.deck.ondragleave = (ev) => {
+    if (!state.draggingColumnId) return;
+    if (ev.relatedTarget instanceof Node && dom.deck.contains(ev.relatedTarget)) return;
+    clearColumnDropPlaceholder();
+  };
+}
+
+function findColumnDropTarget(dom: DOM, sourceId: string, clientX: number): { el: HTMLElement; position: "before" | "after" } | null {
+  const columns = Array.from(dom.deck.querySelectorAll<HTMLElement>(".deck-column"))
+    .filter((el) => el.dataset.columnId !== sourceId);
+  if (columns.length === 0) return null;
+  for (const el of columns) {
+    const rect = el.getBoundingClientRect();
+    if (clientX < rect.left + rect.width / 2) return { el, position: "before" };
+  }
+  return { el: columns[columns.length - 1], position: "after" };
 }
 
 function isColumnDragHandle(target: EventTarget | null, columnEl: HTMLElement): boolean {
@@ -1538,17 +1580,13 @@ function isColumnDragHandle(target: EventTarget | null, columnEl: HTMLElement): 
   return !target.closest("button, a, input, textarea, select, [contenteditable]");
 }
 
-function columnDropPosition(ev: DragEvent, target: HTMLElement): "before" | "after" {
-  const rect = target.getBoundingClientRect();
-  return ev.clientX >= rect.left + rect.width / 2 ? "after" : "before";
-}
-
 function showColumnDropPlaceholder(dom: DOM, target: HTMLElement, position: "before" | "after"): void {
   const existing = document.getElementById(DROP_PLACEHOLDER_ID);
   const placeholder = existing ?? document.createElement("section");
   placeholder.id = DROP_PLACEHOLDER_ID;
   placeholder.className = "deck-column-drop-placeholder";
   placeholder.setAttribute("aria-hidden", "true");
+  placeholder.textContent = "Drop column here";
   if (position === "before") dom.deck.insertBefore(placeholder, target);
   else dom.deck.insertBefore(placeholder, target.nextSibling);
 }
