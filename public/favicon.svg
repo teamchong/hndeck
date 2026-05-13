@@ -1,14 +1,15 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
-  <rect width="128" height="128" fill="#e85d00" />
-  <path d="M6 12a6 6 0 0 1 6-6h24a6 6 0 0 1 6 6v116H6V12Z" fill="#ff7417" />
-  <path d="M48 12a6 6 0 0 1 6-6h24a6 6 0 0 1 6 6v116H48V12Z" fill="#ff7417" />
-  <path d="M90 12a6 6 0 0 1 6-6h34a6 6 0 0 1 6 6v116H90V12Z" fill="#ff7417" />
+  <rect width="128" height="128" fill="#ff8c42" />
+  <path d="M6 12a6 6 0 0 1 6-6h42a6 6 0 0 1 6 6v116H6V12Z" fill="#ff4f09" />
+  <path d="M64 12a6 6 0 0 1 6-6H128V128H64V12Z" fill="#ff4f09" />
   <g fill="#fffaf3">
-    <rect x="14" y="30" width="12" height="68" rx="1" />
-    <rect x="47" y="30" width="12" height="68" rx="1" />
-    <rect x="22" y="57" width="34" height="12" rx="1" />
+    <!-- H in column 1 -->
+    <rect x="20" y="30" width="12" height="68" rx="1" />
+    <rect x="42" y="30" width="12" height="68" rx="1" />
+    <rect x="20" y="57" width="34" height="12" rx="1" />
+    <!-- N in column 2 -->
     <rect x="68" y="30" width="12" height="68" rx="1" />
-    <rect x="104" y="30" width="12" height="68" rx="1" />
-    <path d="M78 30h12l26 68h-12L78 30Z" />
+    <rect x="100" y="30" width="12" height="68" rx="1" />
+    <path d="M76 30h12l24 68h-12z" />
   </g>
 </svg>

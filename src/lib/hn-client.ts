@@ -238,6 +238,30 @@ export async function fetchFeedStoryBatch(
   };
 }
 
+export async function fetchSearchStoryBatch(
+  query: string,
+  start: number,
+  end: number,
+  signal?: AbortSignal,
+): Promise<BatchResult<HNStory>> {
+  const q = query.trim();
+  if (!q) return { stories: [], total: 0, hasMore: false };
+  const hitsPerPage = Math.max(1, Math.min(1000, end));
+  const url =
+    `https://hn.algolia.com/api/v1/search_by_date?tags=story` +
+    `&query=${encodeURIComponent(q)}` +
+    `&hitsPerPage=${hitsPerPage}`;
+  const r = await fetch(url, { signal });
+  if (!r.ok) throw new Error(`HN Algolia search: HTTP ${r.status}`);
+  const json = (await r.json()) as { hits?: AlgoliaHit[]; nbHits?: number };
+  const stories = (json.hits ?? [])
+    .map(algoliaHitToStory)
+    .filter((s): s is HNStory => !!s)
+    .slice(start, end);
+  const total = typeof json.nbHits === "number" ? json.nbHits : stories.length;
+  return { stories, total, hasMore: end < total };
+}
+
 function feedEndpoint(feed: HNFeed): string {
   switch (feed) {
     case "top": return "topstories";

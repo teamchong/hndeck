@@ -3,6 +3,7 @@
 import {
   fetchTopStoryBatch,
   fetchFeedStoryBatch,
+  fetchSearchStoryBatch,
   clearHNCache,
   hnFromSiteUrl,
   hnPermalink,
@@ -24,12 +25,12 @@ import {
 } from "./deck";
 import { DeckRouter, type DeckAction, type DeckSink } from "./deck-sdk";
 import { createDeckExecutor } from "./deck-executor";
-import { buildDeckSystemPrompt, buildDeckUserPrompt } from "./deck-prompt";
-import { checkAvailability, createSession, streamPrompt, type ModelStatus } from "./prompt-api";
+import { buildDeckSystemPrompt, buildDeckUserPrompt, buildSourceFilterSystemPrompt, buildSourceFilterUserPrompt } from "./deck-prompt";
+import { createPromptBus, type PromptBus } from "./prompt-bus";
+import { checkAvailability, createSession, type ModelStatus } from "./prompt-api";
 import { classifyFailure, detectBrowser, guideContentFor, type GuideContent } from "./setup-guide";
 
 const BATCH = 30;
-const MIN_CURATED_CARDS = 8;
 const AUTO_RELOAD_OPTIONS = [60_000, 5 * 60_000, 60 * 60_000] as const;
 const DEFAULT_AUTO_RELOAD_MS = AUTO_RELOAD_OPTIONS[0];
 const CARD_STALE_MS = 5 * 60_000;
@@ -80,8 +81,8 @@ interface DOM {
   columnDialog: HTMLDialogElement;
   columnTitle: HTMLInputElement;
   columnKind: HTMLSelectElement;
+  columnSourceParam: HTMLInputElement;
   columnPredicate: HTMLTextAreaElement;
-  columnFilter: HTMLInputElement;
   columnSave: HTMLButtonElement;
   columnCancel: HTMLButtonElement;
   columnClose: HTMLButtonElement;
@@ -96,6 +97,8 @@ interface ColumnRuntime {
   topStatus: HTMLElement;
   sentinel: HTMLElement;
   cursor: number;
+  searchCursor: number;
+  searchFallback: boolean;
   loading: boolean;
   topRefreshing: boolean;
   topPull: number;
@@ -109,6 +112,8 @@ interface AppState {
   columns: Map<string, ColumnRuntime>;
   columnItems: Map<string, ColumnItem[]>;
   storyById: Map<number, HNFeedItem>;
+  sourceFilterDecisions: Map<string, boolean>;
+  promptBus: PromptBus;
   routingInstructions: string;
   modelReady: boolean;
   routingCursor: number;
@@ -184,6 +189,8 @@ async function startDeckAppAsync(): Promise<void> {
     columns: new Map(),
     columnItems: new Map(),
     storyById: new Map(),
+    sourceFilterDecisions: new Map(),
+    promptBus: createPromptBus(),
     routingInstructions: persisted?.routingInstructions ?? "",
     modelReady: false,
     routingCursor: 0,
@@ -308,7 +315,7 @@ function ensureCoreDOM(baseline: DOMBaseline): void {
   ensureChildElement("deck", main, baseline);
   ensureDialogWithChildren("about-dialog", ["about-close"], baseline);
   ensureDialogWithChildren("editor-dialog", ["editor-close", "editor-done", "routing-instructions", "ui-size-btn", "reset-state"], baseline);
-  ensureDialogWithChildren("column-dialog", ["column-close", "column-title", "column-kind", "column-predicate", "column-filter", "column-save", "column-cancel"], baseline);
+  ensureDialogWithChildren("column-dialog", ["column-close", "column-title", "column-kind", "column-source-param", "column-predicate", "column-save", "column-cancel"], baseline);
   ensureAppCSS(baseline);
 }
 
@@ -389,8 +396,8 @@ function getDOM(): DOM {
     columnDialog: get<HTMLDialogElement>("column-dialog"),
     columnTitle: get<HTMLInputElement>("column-title"),
     columnKind: get<HTMLSelectElement>("column-kind"),
+    columnSourceParam: get<HTMLInputElement>("column-source-param"),
     columnPredicate: get<HTMLTextAreaElement>("column-predicate"),
-    columnFilter: get<HTMLInputElement>("column-filter"),
     columnSave: get<HTMLButtonElement>("column-save"),
     columnCancel: get<HTMLButtonElement>("column-cancel"),
     columnClose: get<HTMLButtonElement>("column-close"),
@@ -541,6 +548,7 @@ async function bootstrap(state: AppState, dom: DOM): Promise<void> {
     setSetup(dom, { kind: "hidden" });
     dom.instructionsBox.disabled = false;
     setStatus(dom, "Nano is ready. Filling curated columns…");
+    loadNanoFilteredRawColumns(state);
     void routeUntilFilled(state, dom);
     return;
   }
@@ -563,6 +571,7 @@ async function beginModelDownload(state: AppState, dom: DOM): Promise<void> {
     setSetup(dom, { kind: "hidden" });
     dom.instructionsBox.disabled = false;
     setStatus(dom, "Nano is ready. Filling curated columns…");
+    loadNanoFilteredRawColumns(state);
     void routeUntilFilled(state, dom);
   } catch (err) {
     const info = detectBrowser();
@@ -579,9 +588,8 @@ function renderDeck(state: AppState, dom: DOM): void {
     const el = document.createElement("section");
     el.className = `deck-column deck-column--${column.kind}`;
     el.dataset.columnId = column.id;
-    el.draggable = true;
     el.innerHTML = `
-      <header class="deck-column__header">
+      <header class="deck-column__header" draggable="true" title="Drag to reorder column">
         <h2 class="deck-column__title">${escapeHtml(column.title)}</h2>
         <div class="deck-column__actions">
           <button class="deck-column__btn deck-column__btn--edit" data-action="left" title="Move column left" aria-label="Move column left">←</button>
@@ -606,6 +614,8 @@ function renderDeck(state: AppState, dom: DOM): void {
       topStatus,
       sentinel,
       cursor: 0,
+      searchCursor: 0,
+      searchFallback: false,
       loading: false,
       topRefreshing: false,
       topPull: 0,
@@ -660,7 +670,10 @@ function renderDeck(state: AppState, dom: DOM): void {
     }, { passive: true });
 
     if (column.kind === "raw") {
-      if (getColumnItems(state, column.id).length === 0) void loadRawBatch(state, runtime);
+      if (getColumnItems(state, column.id).length === 0) {
+        renderRawColumnWaitingMessage(state, runtime);
+        void loadRawBatch(state, runtime);
+      }
       else runtime.sentinel.textContent = runtime.hasMore ? "Scroll for more" : endOfFeedLabel(runtime.column);
     } else if (getColumnItems(state, column.id).length === 0) {
       renderCuratedEmpty(runtime);
@@ -684,34 +697,78 @@ function renderCuratedEmpty(runtime: ColumnRuntime): void {
   runtime.sentinel.textContent = "Not routed yet";
 }
 
+function loadNanoFilteredRawColumns(state: AppState): void {
+  for (const runtime of state.columns.values()) {
+    if (columnNeedsNanoFilter(runtime.column) && getColumnItems(state, runtime.column.id).length === 0) {
+      void loadRawBatch(state, runtime);
+    }
+  }
+}
+
 function renderColumnMessage(runtime: ColumnRuntime, text: string, kind: "empty" | "error" = "empty"): void {
   runtime.body.innerHTML = `<p class="deck-empty ${kind === "error" ? "deck-empty--error" : ""}">${escapeHtml(text)}</p>`;
+}
+
+function renderRawColumnWaitingMessage(state: AppState, runtime: ColumnRuntime): void {
+  if (runtime.column.kind !== "raw" || !runtime.column.description?.trim() || visibleCardCount(runtime) > 0) return;
+  const message = parseLiteralSourcePredicate(runtime.column.description)
+    ? "Filtering this source. Matching stories will appear here automatically."
+    : state.modelReady
+      ? "Waiting for Nano to filter this source. Matching stories will appear here automatically."
+      : "Waiting for Nano. This source has a prompt filter, so matching stories will appear after Nano is ready.";
+  renderColumnMessage(runtime, message);
+}
+
+function clearColumnMessage(runtime: ColumnRuntime): void {
+  runtime.body.querySelector<HTMLElement>(".deck-empty")?.remove();
 }
 
 async function loadRawBatch(state: AppState, runtime: ColumnRuntime): Promise<void> {
   if (runtime.loading || !runtime.hasMore) return;
   runtime.loading = true;
   runtime.sentinel.textContent = "Loading more…";
+  renderRawColumnWaitingMessage(state, runtime);
   try {
-    const batch = await fetchFeedStoryBatch(
-      runtime.column.feed ?? "top",
-      runtime.cursor,
-      runtime.cursor + BATCH,
-      undefined,
-      { user: runtime.column.feedUser, month: runtime.column.feedMonth },
-    );
     let added = 0;
-    for (const story of batch.stories) {
-      if (!matchesColumnFilter(story, runtime.column.filter)) continue;
-      if (runtime.body.querySelector(`[data-story-id="${story.id}"]`)) continue;
-      state.storyById.set(story.id, story);
-      upsertColumnItem(state, runtime.column.id, { storyId: story.id, lastRenderedAt: Date.now() });
-      runtime.body.appendChild(renderStoryCard(story));
-      added++;
-    }
-    runtime.cursor += BATCH;
-    runtime.hasMore = batch.hasMore;
-    if (visibleCardCount(runtime) === 0 && !runtime.hasMore) renderColumnMessage(runtime, "No items found for this column.");
+    do {
+      const literal = literalSourcePredicate(runtime.column);
+      const batch = runtime.searchFallback && literal
+        ? await fetchSearchStoryBatch(literal.join(" "), runtime.searchCursor, runtime.searchCursor + BATCH)
+        : await fetchFeedStoryBatch(
+          runtime.column.feed ?? "top",
+          runtime.cursor,
+          runtime.cursor + BATCH,
+          undefined,
+          { user: runtime.column.feedUser, month: runtime.column.feedMonth },
+        );
+      if (columnNeedsNanoFilter(runtime.column) && !state.modelReady) {
+        runtime.sentinel.textContent = "Nano filter not ready";
+        if (visibleCardCount(runtime) === 0) renderColumnMessage(runtime, "This source has a prompt filter. Enable Nano to apply it.");
+        return;
+      }
+      const stories = await filterSourceStories(state, runtime, batch.stories);
+      for (const story of stories) {
+        if (runtime.body.querySelector(`[data-story-id="${story.id}"]`)) continue;
+        state.storyById.set(story.id, story);
+        upsertColumnItem(state, runtime.column.id, { storyId: story.id, lastRenderedAt: Date.now() });
+        if (added === 0) clearColumnMessage(runtime);
+        runtime.body.appendChild(renderStoryCard(story));
+        added++;
+      }
+      if (runtime.searchFallback) runtime.searchCursor += BATCH;
+      else runtime.cursor += BATCH;
+      runtime.hasMore = batch.hasMore;
+      if (!runtime.hasMore && literal && !runtime.searchFallback && !columnHasScrollableBacklog(runtime)) {
+        runtime.searchFallback = true;
+        runtime.hasMore = true;
+      }
+      if (shouldScanMoreFilteredSource(runtime)) {
+        runtime.sentinel.textContent = runtime.searchFallback
+          ? `Searching older HN stories for ${literal?.join(" ") ?? "matches"}…`
+          : `Scanning older ${runtime.column.feed ?? "top"} stories…`;
+      }
+    } while (shouldScanMoreFilteredSource(runtime));
+    if (visibleCardCount(runtime) === 0 && !runtime.hasMore) renderColumnMessage(runtime, "No matching items found for this column.");
     runtime.sentinel.textContent = runtime.hasMore ? "Scroll for more" : endOfFeedLabel(runtime.column);
     if (added === 0 && runtime.hasMore) runtime.sentinel.textContent = "Scroll for more matches";
   } catch (err) {
@@ -721,6 +778,20 @@ async function loadRawBatch(state: AppState, runtime: ColumnRuntime): Promise<vo
   } finally {
     runtime.loading = false;
   }
+}
+
+function shouldScanMoreFilteredSource(runtime: ColumnRuntime): boolean {
+  return runtime.column.kind === "raw" &&
+    !!runtime.column.description?.trim() &&
+    runtime.hasMore &&
+    !columnHasScrollableBacklog(runtime);
+}
+
+function columnHasScrollableBacklog(runtime: ColumnRuntime): boolean {
+  const cards = visibleCardCount(runtime);
+  if (cards === 0) return false;
+  if (runtime.body.clientHeight <= 0) return cards >= 12;
+  return runtime.body.scrollHeight > runtime.body.clientHeight + 80;
 }
 
 function endOfFeedLabel(column: Column): string {
@@ -735,16 +806,93 @@ function endOfFeedLabel(column: Column): string {
   }
 }
 
-function matchesColumnFilter(story: HNFeedItem, filter: string | undefined): boolean {
-  const q = filter?.trim().toLowerCase();
-  if (!q) return true;
+function columnNeedsNanoFilter(column: Column): boolean {
+  const predicate = column.description?.trim();
+  return column.kind === "raw" && !!predicate && literalSourcePredicate(column) === null;
+}
+
+async function filterSourceStories(state: AppState, runtime: ColumnRuntime, stories: HNFeedItem[]): Promise<HNFeedItem[]> {
+  const predicate = runtime.column.description?.trim();
+  if (!predicate || runtime.column.kind !== "raw" || stories.length === 0) return stories;
+  const literal = literalSourcePredicate(runtime.column);
+  if (literal) return stories.filter((story) => literalSourceMatches(story, literal));
+
+  const undecided: HNFeedItem[] = [];
+  for (const story of stories) {
+    if (!state.sourceFilterDecisions.has(sourceFilterCacheKey(runtime.column, story.id))) undecided.push(story);
+  }
+
+  if (undecided.length > 0) {
+    let validDecisions = 0;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const filterColumn: Column = {
+        ...runtime.column,
+        kind: "curated",
+        description: predicate,
+      };
+      const sink: DeckSink = {
+        enqueue(action) {
+          if (!undecided.some((story) => story.id === action.storyId)) return;
+          state.sourceFilterDecisions.set(sourceFilterCacheKey(runtime.column, action.storyId), action.columnId === runtime.column.id);
+          validDecisions++;
+        },
+        onSkip(reason) {
+          console.warn("[deck filter] skipped", reason);
+        },
+      };
+      const router = new DeckRouter([runtime.column.id], undecided.map((story) => story.id), sink);
+      const executor = createDeckExecutor(router);
+      await state.promptBus.run({
+        systemPrompt: buildSourceFilterSystemPrompt({
+          column: filterColumn,
+          stories: undecided,
+          batchStart: runtime.cursor,
+        }),
+        userPrompt: buildSourceFilterUserPrompt(attempt > 0),
+        onChunk: (chunk) => executor.push(chunk),
+      });
+      executor.end();
+      if (validDecisions > 0 || attempt > 0) break;
+    }
+    for (const story of undecided) {
+      const key = sourceFilterCacheKey(runtime.column, story.id);
+      if (!state.sourceFilterDecisions.has(key)) state.sourceFilterDecisions.set(key, false);
+    }
+  }
+
+  return stories.filter((story) => state.sourceFilterDecisions.get(sourceFilterCacheKey(runtime.column, story.id)) === true);
+}
+
+function parseLiteralSourcePredicate(predicate: string): string[] | null {
+  const p = predicate.trim();
+  if (!p) return null;
+  const quoted = p.match(/^['"]([^'"]{1,80})['"]$/);
+  if (quoted) return [quoted[1]!.toLowerCase()];
+  if (/^[a-z0-9][a-z0-9._-]{1,79}$/i.test(p)) return [p.toLowerCase()];
+  if (/^[a-z0-9][a-z0-9._-]*(\s+[a-z0-9][a-z0-9._-]*){1,2}$/i.test(p)) {
+    return p.toLowerCase().split(/\s+/);
+  }
+  return null;
+}
+
+function literalSourcePredicate(column: Column): string[] | null {
+  const predicate = column.description?.trim();
+  return predicate ? parseLiteralSourcePredicate(predicate) : null;
+}
+
+function literalSourceMatches(story: HNFeedItem, terms: readonly string[]): boolean {
   const haystack = [
     story.by,
-    story.type === "story" ? story.title : story.text,
+    story.type === "comment" ? "news.ycombinator.com" : hostOf(story.url),
+    story.type === "comment" ? stripHtml(story.text) : story.title,
+    story.type === "story" ? stripHtml(story.text ?? "") : "",
     story.type === "story" ? story.url ?? "" : "",
-    story.type === "story" ? hostOf(story.url) : "news.ycombinator.com",
-  ].join(" ").toLowerCase();
-  return q.split(/\s+/).every((term) => haystack.includes(term));
+  ].join("\n").toLowerCase();
+  return terms.every((term) => haystack.includes(term));
+}
+
+function sourceFilterCacheKey(column: Column, storyId: number): string {
+  return `${column.id}\n${column.description?.trim() ?? ""}\n${storyId}`;
 }
 
 async function refreshColumnFromTop(state: AppState, dom: DOM, runtime: ColumnRuntime): Promise<void> {
@@ -764,10 +912,15 @@ async function refreshColumnFromTop(state: AppState, dom: DOM, runtime: ColumnRu
         undefined,
         { user: runtime.column.feedUser, month: runtime.column.feedMonth },
       );
+      if (columnNeedsNanoFilter(runtime.column) && !state.modelReady) {
+        runtime.sentinel.textContent = "Nano filter not ready";
+        if (visibleCardCount(runtime) === 0) renderColumnMessage(runtime, "This source has a prompt filter. Enable Nano to apply it.");
+        return;
+      }
+      const stories = await filterSourceStories(state, runtime, batch.stories);
       const fragment = document.createDocumentFragment();
       let added = 0;
-      for (const story of batch.stories) {
-        if (!matchesColumnFilter(story, runtime.column.filter)) continue;
+      for (const story of stories) {
         state.storyById.set(story.id, story);
         const item = { storyId: story.id, lastRenderedAt: Date.now() };
         const existing = runtime.body.querySelector<HTMLElement>(`[data-story-id="${story.id}"]`);
@@ -782,7 +935,10 @@ async function refreshColumnFromTop(state: AppState, dom: DOM, runtime: ColumnRu
         fragment.appendChild(renderStoryCard(story, true));
         added++;
       }
-      if (added > 0) runtime.body.prepend(fragment);
+      if (added > 0) {
+        clearColumnMessage(runtime);
+        runtime.body.prepend(fragment);
+      }
       runtime.sentinel.textContent = added > 0 ? `Added ${added} new` : "No new items";
       runtime.cursor = Math.max(runtime.cursor, BATCH);
       runtime.hasMore = batch.hasMore;
@@ -900,13 +1056,12 @@ async function routeOneBatch(
       };
       const router = new DeckRouter(curated.map((c) => c.id), batch.stories.map((s) => s.id), sink);
       const executor = createDeckExecutor(router);
-      const session = await createSession(buildDeckSystemPrompt({ routingInstructions, columns: state.deck.columns, stories: batch.stories, batchStart: state.routingCursor }));
-      try {
-        for await (const chunk of streamPrompt(session, buildDeckUserPrompt(attempt > 0))) executor.push(chunk);
-        executor.end();
-      } finally {
-        session.destroy();
-      }
+      await state.promptBus.run({
+        systemPrompt: buildDeckSystemPrompt({ routingInstructions, columns: state.deck.columns, stories: batch.stories, batchStart: state.routingCursor }),
+        userPrompt: buildDeckUserPrompt(attempt > 0),
+        onChunk: (chunk) => executor.push(chunk),
+      });
+      executor.end();
       if (decisions > 0 || attempt > 0) break;
       if (!silent) setStatus(dom, "Nano returned no valid decisions. Retrying once…");
     }
@@ -1041,7 +1196,7 @@ function coerceUISize(value: unknown): UISize {
 
 function underfilledCuratedColumns(state: AppState): ColumnRuntime[] {
   return Array.from(state.columns.values()).filter((rt) =>
-    rt.column.kind === "curated" && visibleCardCount(rt) < MIN_CURATED_CARDS,
+    rt.column.kind === "curated" && !columnHasScrollableBacklog(rt),
   );
 }
 
@@ -1346,6 +1501,10 @@ function moveColumnInDeck(state: AppState, dom: DOM, id: string, direction: -1 |
 
 function bindColumnDragEvents(state: AppState, dom: DOM, runtime: ColumnRuntime): void {
   runtime.el.addEventListener("dragstart", (ev) => {
+    if (!isColumnDragHandle(ev.target, runtime.el)) {
+      ev.preventDefault();
+      return;
+    }
     ev.dataTransfer?.setData("text/plain", runtime.column.id);
     ev.dataTransfer && (ev.dataTransfer.effectAllowed = "move");
     runtime.el.classList.add("deck-column--dragging");
@@ -1370,6 +1529,13 @@ function bindColumnDragEvents(state: AppState, dom: DOM, runtime: ColumnRuntime)
     queuePersistState(state);
     renderDeck(state, dom);
   });
+}
+
+function isColumnDragHandle(target: EventTarget | null, columnEl: HTMLElement): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const header = target.closest<HTMLElement>(".deck-column__header");
+  if (!header || !columnEl.contains(header)) return false;
+  return !target.closest("button, a, input, textarea, select, [contenteditable]");
 }
 
 function columnDropPosition(ev: DragEvent, target: HTMLElement): "before" | "after" {
@@ -1406,16 +1572,14 @@ function reorderColumn(deck: Deck, sourceId: string, targetId: string, position:
 function openColumnDialog(state: AppState, dom: DOM, id: string | null): void {
   state.editingColumnId = id;
   const col = id ? state.deck.columns.find((c) => c.id === id) : null;
-  dom.columnTitle.value = col?.title ?? "Funny";
+  dom.columnTitle.value = col?.title ?? "Engineer bait";
   dom.columnKind.value = col?.kind === "raw" ? (col.feed ?? "top") : "custom";
-  dom.columnPredicate.value = col?.kind === "curated"
-    ? col.description ?? ""
-    : col?.feed === "user"
-      ? col.feedUser ?? ""
-      : col?.feed === "best-month"
-        ? col.feedMonth ?? new Date().toISOString().slice(0, 7)
-        : rawPredicateText(col?.feed ?? "top");
-  dom.columnFilter.value = col?.filter ?? "";
+  dom.columnSourceParam.value = col?.feed === "user"
+    ? col.feedUser ?? ""
+    : col?.feed === "best-month"
+      ? col.feedMonth ?? new Date().toISOString().slice(0, 7)
+      : "";
+  dom.columnPredicate.value = col?.description ?? (col ? "" : defaultColumnPrompt("custom"));
   syncColumnKindState(dom, false);
   if (typeof dom.columnDialog.showModal === "function") dom.columnDialog.showModal();
   else dom.columnDialog.setAttribute("open", "");
@@ -1432,30 +1596,33 @@ function saveColumnDialog(state: AppState, dom: DOM): void {
   const kind = dom.columnKind.value;
   const editingId = state.editingColumnId;
   const previous = editingId ? state.deck.columns.find((c) => c.id === editingId) : null;
-  const filter = dom.columnFilter.value.trim() || undefined;
+  const sourceParam = dom.columnSourceParam.value.trim();
+  const description = dom.columnPredicate.value.trim() || undefined;
   const next: Omit<Column, "id"> =
     kind === "top" || kind === "new" || kind === "ask" || kind === "show"
-      ? { kind: "raw", title, feed: kind, feedUser: undefined, feedMonth: undefined, filter, description: undefined }
+      ? { kind: "raw", title, feed: kind, feedUser: undefined, feedMonth: undefined, description }
       : kind === "user"
-        ? { kind: "raw", title, feed: "user", feedUser: dom.columnPredicate.value.trim(), feedMonth: undefined, filter, description: undefined }
+        ? { kind: "raw", title, feed: "user", feedUser: sourceParam || "hacker", feedMonth: undefined, description }
       : kind === "best-month"
-        ? { kind: "raw", title, feed: "best-month", feedMonth: dom.columnPredicate.value.trim() || new Date().toISOString().slice(0, 7), feedUser: undefined, filter, description: undefined }
+        ? { kind: "raw", title, feed: "best-month", feedMonth: sourceParam || new Date().toISOString().slice(0, 7), feedUser: undefined, description }
       : {
           kind: "curated",
           title,
-          description: dom.columnPredicate.value.trim() || "Stories matching this column's predicate.",
+          description: description || defaultColumnPrompt("custom"),
           feed: undefined,
           feedUser: undefined,
           feedMonth: undefined,
-          filter: undefined,
         };
   if (editingId) {
     state.deck = updateColumn(state.deck, editingId, next);
   } else {
     state.deck = addColumn(state.deck, { ...next, id: newColumnId() });
   }
+  if (editingId) {
+    state.columnItems.delete(editingId);
+    clearSourceFilterDecisions(state, editingId);
+  }
   if (previous?.kind === "curated" || next.kind === "curated") resetCuratedRoutingCache(state);
-  else if (editingId) state.columnItems.delete(editingId);
   queuePersistState(state);
   closeColumnDialog(state, dom);
   renderDeck(state, dom);
@@ -1471,18 +1638,22 @@ function resetCuratedRoutingCache(state: AppState): void {
   }
 }
 
-function syncColumnKindState(dom: DOM, updateTitle: boolean): void {
-  const isCustom = dom.columnKind.value === "custom";
-  const needsParam = dom.columnKind.value === "user" || dom.columnKind.value === "best-month";
-  dom.columnPredicate.disabled = !isCustom && !needsParam;
-  dom.columnFilter.disabled = isCustom;
-  if (updateTitle) dom.columnTitle.value = defaultColumnTitle(dom.columnKind.value);
-  if (!isCustom && !needsParam) dom.columnPredicate.value = rawPredicateText(dom.columnKind.value);
-  if (dom.columnKind.value === "user" && (updateTitle || !dom.columnPredicate.value.trim())) {
-    dom.columnPredicate.value = "hacker";
+function clearSourceFilterDecisions(state: AppState, columnId: string): void {
+  for (const key of state.sourceFilterDecisions.keys()) {
+    if (key.startsWith(`${columnId}\n`)) state.sourceFilterDecisions.delete(key);
   }
-  if (dom.columnKind.value === "best-month" && !dom.columnPredicate.value.trim()) {
-    dom.columnPredicate.value = new Date().toISOString().slice(0, 7);
+}
+
+function syncColumnKindState(dom: DOM, updateTitle: boolean): void {
+  const needsParam = dom.columnKind.value === "user" || dom.columnKind.value === "best-month";
+  dom.columnSourceParam.disabled = !needsParam;
+  if (updateTitle) dom.columnTitle.value = defaultColumnTitle(dom.columnKind.value);
+  if (updateTitle) dom.columnPredicate.value = "";
+  if (dom.columnKind.value === "user" && (updateTitle || !dom.columnSourceParam.value.trim())) {
+    dom.columnSourceParam.value = "hacker";
+  }
+  if (dom.columnKind.value === "best-month" && !dom.columnSourceParam.value.trim()) {
+    dom.columnSourceParam.value = new Date().toISOString().slice(0, 7);
   }
 }
 
@@ -1493,22 +1664,15 @@ function defaultColumnTitle(kind: string): string {
     case "show": return "Show";
     case "user": return "hacker";
     case "best-month": return "Best this month";
-    case "custom": return "Funny";
+    case "custom": return "Engineer bait";
     case "top":
     default: return "Top";
   }
 }
 
-function rawPredicateText(feed: string): string {
-  switch (feed) {
-    case "new": return "Built-in Hacker News feed: newest stories.";
-    case "ask": return "Built-in Hacker News feed: Ask HN discussions.";
-    case "show": return "Built-in Hacker News feed: Show HN projects.";
-    case "user": return "hacker";
-    case "best-month": return "YYYY-MM";
-    case "top":
-    default: return "Built-in Hacker News feed: top stories.";
-  }
+function defaultColumnPrompt(kind: string): string {
+  if (kind !== "custom") return "";
+  return "Deep technical posts a working software engineer would stop scrolling for: debugging stories, infrastructure details, databases, compilers, browsers, performance, reliability, and practical tools. Skip generic AI takes, funding, hiring, politics, and drama.";
 }
 
 function visibleCardCount(rt: ColumnRuntime): number {

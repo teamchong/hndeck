@@ -12,8 +12,8 @@
       name="description"
       content="Define HN columns in plain English. Gemini Nano routes stories on-device; your column definitions never leave your browser."
     />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=26" />
-    <link rel="alternate icon" href="/favicon.ico?v=26" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=32" />
+    <link rel="alternate icon" href="/favicon.ico?v=32" />
   </head>
 
   <body data-app-ready="false">
@@ -27,7 +27,7 @@
 
     <header class="topbar" data-app-version="2">
       <div class="topbar__brand">
-        <img class="topbar__logo" src="/favicon.svg?v=26" alt="HNDeck" />
+        <img class="topbar__logo" src="/favicon.svg?v=32" alt="HNDeck" />
         <div>
           <a class="topbar__title-link" href="/" aria-label="Home">
             <h1 class="topbar__title">TweetDeck for HN, prompt-routed by Gemini Nano</h1>
@@ -203,7 +203,7 @@
     </dialog>
 
     <!-- ─── Per-column settings dialog ─────────────────────────────── -->
-    <dialog id="column-dialog" class="about-dialog" data-app-version="3">
+    <dialog id="column-dialog" class="about-dialog" data-app-version="4">
       <article class="about-dialog__panel">
         <header class="about-dialog__header">
           <h2 class="about-dialog__hed">Column settings</h2>
@@ -245,31 +245,31 @@
             placeholder="e.g. Tools, AI, Funny"
           />
 
+          <label class="editor-form__label" for="column-source-param">
+            <span>Source parameter</span>
+            <span class="editor-form__hint">
+              User submissions: HN username. Best month: YYYY-MM. Leave blank for other sources.
+            </span>
+          </label>
+          <input
+            id="column-source-param"
+            class="editor-form__input"
+            type="text"
+            placeholder="hacker or 2026-05"
+          />
+
           <label class="editor-form__label" for="column-predicate">
             <span>Prompt / predicate</span>
             <span class="editor-form__hint">
-              Custom: Nano routing prompt. User: HN username. Best month: YYYY-MM (blank = current month).
+              Optional Nano prompt. For source columns, Nano filters the source before rendering. Blank means show the source as-is.
             </span>
           </label>
           <textarea
             id="column-predicate"
             class="editor-form__textarea"
             rows="5"
-            placeholder="Funny, pg, 2026-05, or a custom routing prompt"
+            placeholder="e.g. only practical engineering tools, skip drama, database internals, genuinely funny"
           ></textarea>
-
-          <label class="editor-form__label" for="column-filter">
-            <span>Filter</span>
-            <span class="editor-form__hint">
-              Optional text filter for raw/source columns. Matches title, URL, domain, author, or post text.
-            </span>
-          </label>
-          <input
-            id="column-filter"
-            class="editor-form__input"
-            type="text"
-            placeholder="e.g. rust database postgres"
-          />
         </div>
 
         <div class="editor-form__footer">

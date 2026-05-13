@@ -1,13 +1,19 @@
 /** Prompt builder for Nano's deck-routing pass. */
 
 import type { Column } from "./deck";
-import type { HNStory } from "./hn-client";
+import type { HNFeedItem } from "./hn-client";
 import { hostOf, stripHtml } from "./hn-client";
 
 export interface DeckPromptOptions {
   routingInstructions: string;
   columns: Column[];
-  stories: HNStory[];
+  stories: HNFeedItem[];
+  batchStart: number;
+}
+
+export interface SourceFilterPromptOptions {
+  column: Column;
+  stories: HNFeedItem[];
   batchStart: number;
 }
 
@@ -56,13 +62,52 @@ export function buildDeckSystemPrompt(opts: DeckPromptOptions): string {
   ].join("\n");
 }
 
+export function buildSourceFilterSystemPrompt(opts: SourceFilterPromptOptions): string {
+  const predicate = opts.column.description?.trim() || "Show all stories.";
+  return [
+    "You are a strict private news filter. You decide which Hacker News source stories match ONE column predicate.",
+    "Output ONLY deck.* function calls, one per line. No markdown. No prose.",
+    "",
+    "SDK:",
+    `  deck.place("${opts.column.id}", storyId) // story matches the predicate`,
+    "  deck.place(\"\", storyId) // story does NOT match the predicate",
+    "",
+    "Rules:",
+    `  - The only non-empty column id you may use is ${JSON.stringify(opts.column.id)}.`,
+    "  - Emit exactly one decision for EVERY story in the batch.",
+    "  - Be strict. Do not fill for backlog. It is normal for most source stories not to match.",
+    "  - Place a story only when the title/domain/text clearly satisfies the predicate.",
+    "  - If the predicate is a keyword or phrase, require that exact concept to appear in the title, domain, URL, author, or text.",
+    "  - When uncertain, use deck.place(\"\", storyId).",
+    "  - Do not explain why a story was placed.",
+    "",
+    `COLUMN: ${opts.column.title}`,
+    "PREDICATE:",
+    predicate,
+    "",
+    `SOURCE STORIES BATCH starting at index ${opts.batchStart}:`,
+    ...opts.stories.map(formatStory),
+    "",
+    "Now filter this source batch. Output only deck.* function calls.",
+  ].join("\n");
+}
+
 export function buildDeckUserPrompt(retry = false): string {
   return retry
     ? "Retry. Your previous response produced no valid decisions. Output one or more lines per story like deck.place(\"columnId\", 123), or deck.place(\"\", 123) for no column."
     : "Route the stories now.";
 }
 
-function formatStory(s: HNStory): string {
+export function buildSourceFilterUserPrompt(retry = false): string {
+  return retry
+    ? "Retry. Output exactly one deck.place call per story: non-empty column id only for clear matches, empty column id for non-matches."
+    : "Filter the source stories now.";
+}
+
+function formatStory(s: HNFeedItem): string {
+  if (s.type === "comment") {
+    return `  ${s.id} [news.ycombinator.com] Comment by ${s.by} :: ${stripHtml(s.text).slice(0, 160)}`;
+  }
   const text = s.text ? ` :: ${stripHtml(s.text).slice(0, 120)}` : "";
   return `  ${s.id} [${hostOf(s.url)}] ${s.title} (${s.score} pts, ${s.descendants ?? 0} comments)${text}`;
 }

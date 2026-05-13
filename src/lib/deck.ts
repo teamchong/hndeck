@@ -38,16 +38,12 @@ export interface Column {
   feedUser?: string;
   /** Month in YYYY-MM for feed === "best-month". Empty = current month. */
   feedMonth?: string;
-  /** Optional raw-feed text filter. Matches title, author, URL, domain, or text. */
-  filter?: string;
   /** Per-column auto-refresh. Defaults to enabled every 1 minute. */
   autoReloadEnabled?: boolean;
   autoReloadMs?: number;
   /**
-   * What this column is for. Read by Nano to decide which stories to
-   * route here. Empty/undefined on raw columns. Keep it short and
-   * specific — Nano makes better calls when each description has a
-   * clear edge case it owns.
+   * Optional Nano prompt/predicate. For curated columns this defines the
+   * column. For raw/source columns this filters that source before render.
    */
   description?: string;
 }
@@ -89,9 +85,13 @@ export const DEFAULT_DECK: Deck = {
     },
     {
       id: "for-you",
-      title: "Funny",
+      title: "Engineer bait",
       kind: "curated",
-      description: "Funny",
+      description:
+        "Deep technical posts a working software engineer would stop scrolling for: " +
+        "debugging stories, infrastructure details, databases, compilers, browsers, " +
+        "performance, reliability, and practical tools. Skip generic AI takes, funding, " +
+        "hiring, politics, and drama.",
     },
   ],
 };
@@ -113,7 +113,6 @@ function isColumn(x: unknown): x is Column {
   }
   if (c.feedUser !== undefined && typeof c.feedUser !== "string") return false;
   if (c.feedMonth !== undefined && typeof c.feedMonth !== "string") return false;
-  if (c.filter !== undefined && typeof c.filter !== "string") return false;
   if (c.autoReloadEnabled !== undefined && typeof c.autoReloadEnabled !== "boolean") return false;
   if (c.autoReloadMs !== undefined && typeof c.autoReloadMs !== "number") return false;
   if (c.description !== undefined) {
@@ -209,8 +208,12 @@ function migrateDeck(d: Deck): Deck {
       if (c.id === "for-you") {
         return {
           ...c,
-          title: "Funny",
-          description: "Funny",
+          title: "Engineer bait",
+          description:
+            "Deep technical posts a working software engineer would stop scrolling for: " +
+            "debugging stories, infrastructure details, databases, compilers, browsers, " +
+            "performance, reliability, and practical tools. Skip generic AI takes, funding, " +
+            "hiring, politics, and drama.",
         };
       }
       if (c.id !== "showask") return c;
