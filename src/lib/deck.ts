@@ -1,5 +1,5 @@
 /**
- * Deck of editor columns — TweetDeck-style layout.
+ * Deck of editor columns.
  *
  * Two column kinds:
  *

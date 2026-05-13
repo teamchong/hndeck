@@ -7,7 +7,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>TweetDeck for HN, prompt-routed by Gemini Nano</title>
+    <title>HNDeck, prompt-routed by Gemini Nano</title>
     <meta
       name="description"
       content="Define HN columns in plain English. Gemini Nano routes stories on-device; your column definitions never leave your browser."
@@ -30,7 +30,7 @@
         <img class="topbar__logo" src="/favicon.svg?v=32" alt="HNDeck" />
         <div>
           <a class="topbar__title-link" href="/" aria-label="Home">
-            <h1 class="topbar__title">TweetDeck for HN, prompt-routed by Gemini Nano</h1>
+            <h1 class="topbar__title">HNDeck, prompt-routed by Gemini Nano</h1>
           </a>
           <p class="topbar__subtitle">
             Define columns in plain English. Nano routes stories into them, on-device, free, offline. Your column definitions never leave your browser.
@@ -95,7 +95,7 @@
         </div>
       </section>
 
-      <!-- ─── TweetDeck-style column deck ───────────────────────── -->
+      <!-- ─── Deck-style column layout ──────────────────────────── -->
       <section id="deck" class="deck" aria-label="Hacker News columns"></section>
     </main>
 
@@ -121,10 +121,10 @@
         </header>
 
         <p class="about-dialog__caption">
-          Like many people, I noticed Chrome had downloaded the Gemini Nano
-          model and it was taking a few GB of disk space. Since it was already
-          sitting there, I wanted to see if I could build something useful
-          with it.
+          This is a personal learning project for Chrome's Prompt API. Like
+          many people, I noticed Chrome had downloaded the Gemini Nano model
+          and it was taking a few GB of disk space. Since it was already sitting
+          there, I wanted to see if I could build something useful with it.
         </p>
 
         <div class="about-dialog__body">
@@ -277,6 +277,21 @@
           <button id="column-save" class="editor-form__btn editor-form__btn--primary" type="button">
             Save column
           </button>
+        </div>
+      </article>
+    </dialog>
+
+    <dialog id="comments-dialog" class="comments-dialog" data-app-version="1">
+      <article class="comments-dialog__panel">
+        <header class="comments-dialog__header">
+          <div>
+            <p id="comments-meta" class="comments-dialog__meta">HN comments</p>
+            <h2 id="comments-title" class="comments-dialog__title">Comments</h2>
+          </div>
+          <button id="comments-close" class="about-dialog__close" type="button" aria-label="Close">×</button>
+        </header>
+        <div id="comments-body" class="comments-dialog__body">
+          <p class="deck-empty">Select a story to preview comments.</p>
         </div>
       </article>
     </dialog>
@@ -617,7 +632,7 @@
       .status[data-kind="warn"]  { color: #fbbc04; border-color: #fbbc0455; }
       .status[data-kind="error"] { color: var(--red); border-color: #ea433555; }
 
-      /* ─── TweetDeck-style deck ──────────────────────────────── */
+      /* ─── Deck-style column layout ──────────────────────────── */
       .deck {
         display: flex;
         align-items: stretch;
@@ -667,6 +682,19 @@
         max-width: none;
         z-index: 2;
       }
+      .deck-column--focused .deck-column__body {
+        display: block;
+        column-width: 390px;
+        column-gap: 16px;
+      }
+      .deck-column--focused .deck-card {
+        display: inline-block;
+        width: 100%;
+        margin: 0 0 16px;
+      }
+      .deck-column--focused .deck-empty {
+        break-inside: avoid;
+      }
       .deck-column--dragging {
         opacity: 0.55;
         outline: 2px dashed var(--orange);
@@ -695,6 +723,10 @@
           min-width: calc(100vw - 32px);
           height: calc(100vh - 260px);
           min-height: 520px;
+        }
+        .deck-column--focused .deck-column__body {
+          column-width: auto;
+          column-count: 1;
         }
       }
       .deck-column--focused .deck-column__btn--edit {
@@ -864,9 +896,33 @@
         border-color: var(--orange);
         color: #fff;
       }
+      .deck-card__score {
+        position: absolute;
+        top: 28px;
+        left: 0;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 28px;
+        min-height: 22px;
+        padding: 2px 3px;
+        border: 1px solid var(--border);
+        border-radius: 5px;
+        background: var(--bg-3);
+        color: var(--fg-mid);
+        text-decoration: none;
+        font-family: var(--font-sans);
+        font-size: 10px;
+        font-weight: 700;
+        line-height: 1;
+      }
+      .deck-card__score:hover {
+        border-color: var(--orange);
+        color: var(--orange);
+      }
       .deck-card__title-row {
         display: grid;
-        grid-template-columns: 18px 1fr;
+        grid-template-columns: minmax(0, 1fr) 18px;
         gap: 8px;
         align-items: start;
       }
@@ -874,6 +930,7 @@
         width: 16px;
         height: 16px;
         margin-top: 2px;
+        justify-self: end;
         border-radius: 3px;
         background: var(--bg-3);
         object-fit: contain;
@@ -888,11 +945,15 @@
         text-decoration-thickness: 1px;
       }
       .deck-card__meta {
+        display: flex;
+        align-items: center;
+        gap: 5px;
         margin: 0 0 8px;
         color: var(--fg-dim);
         font-size: 12.5px;
         font-style: italic;
         line-height: 1.35;
+        min-width: 0;
       }
       .deck-card__meta a {
         color: inherit;
@@ -902,6 +963,22 @@
       .deck-card__meta a:hover {
         color: var(--orange);
         border-bottom-color: var(--orange);
+      }
+      .deck-card__comments {
+        color: var(--orange-dim) !important;
+        font-weight: 700;
+        font-style: normal;
+      }
+      .deck-card__comments:hover {
+        color: var(--orange) !important;
+      }
+      .deck-card__domain {
+        margin-left: auto;
+        max-width: 42%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        color: var(--fg-dim) !important;
       }
       .deck-card__time {
         appearance: none;
@@ -920,6 +997,80 @@
       }
       .deck-card__body {
         margin: 0 0 8px;
+        color: var(--fg-mid);
+        font-size: 13.5px;
+        line-height: 1.48;
+      }
+      .comments-dialog {
+        border: 0;
+        padding: 0;
+        background: transparent;
+        width: 95vw;
+        max-width: 95vw;
+        height: 95vh;
+        max-height: 95vh;
+      }
+      .comments-dialog::backdrop { background: rgba(0, 0, 0, 0.36); }
+      .comments-dialog__panel {
+        width: 100%;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        background: var(--bg-2);
+        color: var(--fg);
+        border: 1px solid var(--border);
+        border-top: 4px solid var(--orange);
+        border-radius: 12px;
+        box-shadow: 0 18px 56px rgba(0, 0, 0, 0.38);
+        overflow: hidden;
+      }
+      .comments-dialog__header {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 18px 20px 14px;
+        border-bottom: 1px solid var(--border);
+        background: var(--bg-3);
+      }
+      .comments-dialog__meta {
+        margin: 0 0 4px;
+        color: var(--orange-dim);
+        font-family: var(--font-sans);
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      .comments-dialog__title {
+        margin: 0;
+        font-family: var(--font-display);
+        font-size: clamp(20px, 3vw, 30px);
+        line-height: 1.12;
+      }
+      .comments-dialog__body {
+        overflow-y: auto;
+        padding: 16px 20px 22px;
+      }
+      .comments-preview__open {
+        display: inline-block;
+        margin-bottom: 14px;
+        font-family: var(--font-sans);
+        font-size: 12px;
+        font-weight: 700;
+        text-decoration: none;
+      }
+      .comments-preview__comment {
+        padding: 11px 0 11px calc(var(--depth) * 18px);
+        border-top: 1px solid var(--border);
+      }
+      .comments-preview__byline {
+        margin: 0 0 4px;
+        color: var(--fg-dim);
+        font-family: var(--font-sans);
+        font-size: 11.5px;
+      }
+      .comments-preview__text {
+        margin: 0;
         color: var(--fg-mid);
         font-size: 13.5px;
         line-height: 1.48;

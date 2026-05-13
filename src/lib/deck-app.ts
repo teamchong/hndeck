@@ -1,9 +1,10 @@
-/** TweetDeck-style HN deck app. */
+/** Column-based HN deck app. */
 
 import {
   fetchTopStoryBatch,
   fetchFeedStoryBatch,
   fetchSearchStoryBatch,
+  fetchCommentPreview,
   clearHNCache,
   hnFromSiteUrl,
   hnPermalink,
@@ -11,6 +12,7 @@ import {
   hostOf,
   stripHtml,
   type HNFeedItem,
+  type HNCommentNode,
 } from "./hn-client";
 import {
   addColumn,
@@ -86,6 +88,11 @@ interface DOM {
   columnSave: HTMLButtonElement;
   columnCancel: HTMLButtonElement;
   columnClose: HTMLButtonElement;
+  commentsDialog: HTMLDialogElement;
+  commentsClose: HTMLButtonElement;
+  commentsTitle: HTMLElement;
+  commentsMeta: HTMLElement;
+  commentsBody: HTMLElement;
   uiSizeBtn: HTMLButtonElement;
   resetState: HTMLButtonElement;
 }
@@ -100,6 +107,7 @@ interface ColumnRuntime {
   searchCursor: number;
   searchFallback: boolean;
   loading: boolean;
+  backfilling: boolean;
   topRefreshing: boolean;
   topPull: number;
   topPullReset: number | null;
@@ -139,6 +147,7 @@ interface AppState {
   domSnapshotObserver?: MutationObserver;
   customCSSObserver?: MutationObserver;
   cssVarWatchTimer?: number;
+  commentsAbort?: AbortController;
   composeAbort?: AbortController;
 }
 
@@ -318,6 +327,7 @@ function ensureCoreDOM(baseline: DOMBaseline): void {
   ensureDialogWithChildren("about-dialog", ["about-close"], baseline);
   ensureDialogWithChildren("editor-dialog", ["editor-close", "editor-done", "routing-instructions", "ui-size-btn", "reset-state"], baseline);
   ensureDialogWithChildren("column-dialog", ["column-close", "column-title", "column-kind", "column-source-param", "column-predicate", "column-save", "column-cancel"], baseline);
+  ensureDialogWithChildren("comments-dialog", ["comments-close", "comments-title", "comments-meta", "comments-body"], baseline);
   ensureAppCSS(baseline);
 }
 
@@ -403,6 +413,11 @@ function getDOM(): DOM {
     columnSave: get<HTMLButtonElement>("column-save"),
     columnCancel: get<HTMLButtonElement>("column-cancel"),
     columnClose: get<HTMLButtonElement>("column-close"),
+    commentsDialog: get<HTMLDialogElement>("comments-dialog"),
+    commentsClose: get<HTMLButtonElement>("comments-close"),
+    commentsTitle: get("comments-title"),
+    commentsMeta: get("comments-meta"),
+    commentsBody: get("comments-body"),
     uiSizeBtn: get<HTMLButtonElement>("ui-size-btn"),
     resetState: get<HTMLButtonElement>("reset-state"),
   };
@@ -438,6 +453,10 @@ function bindCoreControls(state: AppState, dom: DOM): void {
   dom.columnDialog.onclick = (ev) => {
     if (ev.target === dom.columnDialog) closeColumnDialog(state, dom);
   };
+  dom.commentsClose.onclick = () => dom.commentsDialog.close();
+  dom.commentsDialog.onclick = (ev) => {
+    if (ev.target === dom.commentsDialog) dom.commentsDialog.close();
+  };
   wireDialogControls("about-dialog", "about-btn", "about-close");
   wireDialogControls("editor-dialog", "editor-btn", "editor-close", "editor-done");
   bindKeyboardShortcuts(state, dom);
@@ -450,9 +469,6 @@ function bindKeyboardShortcuts(state: AppState, dom: DOM): void {
     if (ev.key === "n") {
       ev.preventDefault();
       openColumnDialog(state, dom, null);
-    } else if (ev.key === "c") {
-      ev.preventDefault();
-      document.getElementById("editor-btn")?.click();
     } else if (ev.key === "?") {
       ev.preventDefault();
       printDevToolsInstructions();
@@ -619,6 +635,7 @@ function renderDeck(state: AppState, dom: DOM): void {
       searchCursor: 0,
       searchFallback: false,
       loading: false,
+      backfilling: false,
       topRefreshing: false,
       topPull: 0,
       topPullReset: null,
@@ -687,6 +704,7 @@ function renderDeck(state: AppState, dom: DOM): void {
   }
   bindDeckDragPreview(state, dom);
   applyFocusState(state, dom);
+  ensureFocusedColumnBacklog(state, dom);
   updateDeckOverflowState(dom);
 }
 
@@ -972,7 +990,7 @@ function hideTopStatus(runtime: ColumnRuntime): void {
   runtime.topStatus.textContent = "Release to refresh";
 }
 
-async function routeNextBatch(state: AppState, dom: DOM): Promise<void> {
+async function routeNextBatch(state: AppState, dom: DOM): Promise<boolean> {
   if (!state.modelReady) {
     setStatus(dom, "Nano is not ready yet. Enable/download Nano first; raw Front page still works.", "warn");
     for (const rt of state.columns.values()) {
@@ -980,12 +998,12 @@ async function routeNextBatch(state: AppState, dom: DOM): Promise<void> {
         rt.sentinel.textContent = "Nano not ready";
       }
     }
-    return;
+    return false;
   }
-  if (state.routing) return;
+  if (state.routing) return false;
   state.routing = true;
   try {
-    await routeOneBatch(state, dom);
+    return await routeOneBatch(state, dom);
   } finally {
     state.routing = false;
   }
@@ -1447,7 +1465,13 @@ function renderStoryCard(story: HNFeedItem, fresh = false): HTMLElement {
       href="${escapeAttr(hnPermalink(story.id))}"
       target="_blank" rel="noopener noreferrer"
       title="Open on HN to upvote">▲</a>
+    ${isComment ? "" : `<a class="deck-card__score" href="${escapeAttr(hnPermalink(story.id))}" target="_blank" rel="noopener noreferrer" title="${story.score} points">${formatScore(story.score)}</a>`}
     <div class="deck-card__title-row">
+      <h3 class="deck-card__title">
+        <a class="deck-card__title-link"
+          href="${escapeAttr(titleHref)}"
+          target="_blank" rel="noopener noreferrer">${escapeHtml(title)}</a>
+      </h3>
       <img
         class="deck-card__favicon"
         src="${escapeAttr(faviconUrl(host))}"
@@ -1457,11 +1481,6 @@ function renderStoryCard(story: HNFeedItem, fresh = false): HTMLElement {
         loading="lazy"
         referrerpolicy="no-referrer"
       />
-      <h3 class="deck-card__title">
-        <a class="deck-card__title-link"
-          href="${escapeAttr(titleHref)}"
-          target="_blank" rel="noopener noreferrer">${escapeHtml(title)}</a>
-      </h3>
     </div>
     ${meta}
     ${bodyText ? `<p class="deck-card__body">${escapeHtml(bodyText)}</p>` : ""}
@@ -1473,6 +1492,12 @@ function renderStoryCard(story: HNFeedItem, fresh = false): HTMLElement {
       ? timeBtn.dataset.short
       : timeBtn.dataset.full;
   });
+  const commentsLink = el.querySelector<HTMLAnchorElement>("[data-comments-preview]");
+  commentsLink?.addEventListener("click", (ev) => {
+    if (ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey || ev.button !== 0) return;
+    ev.preventDefault();
+    void openCommentsPreview(Number.parseInt(commentsLink.dataset.commentsPreview ?? "", 10));
+  });
   return el;
 }
 
@@ -1480,16 +1505,68 @@ function renderStoryMeta(story: Extract<HNFeedItem, { type: "story" }>, host: st
   const comments = story.descendants ?? 0;
   return `
     <p class="deck-card__meta">
-      <a href="${escapeAttr(hnFromSiteUrl(host))}" target="_blank" rel="noopener noreferrer">${escapeHtml(host)}</a>
-      <span>·</span>
-      <span>${story.score} pts</span>
-      <span>·</span>
-      <a href="${escapeAttr(hnPermalink(story.id))}" target="_blank" rel="noopener noreferrer">${comments} ${comments === 1 ? "comment" : "comments"}</a>
-      <span>·</span>
+      <a class="deck-card__comments" href="${escapeAttr(hnPermalink(story.id))}" target="_blank" rel="noopener noreferrer" data-comments-preview="${story.id}" title="${comments} ${comments === 1 ? "comment" : "comments"}" aria-label="${comments} ${comments === 1 ? "comment" : "comments"}">${comments} 💬</a>
+      <span class="deck-card__dot">·</span>
       <span>by <a href="${escapeAttr(hnUserUrl(by))}" target="_blank" rel="noopener noreferrer">${escapeHtml(by)}</a></span>
-      <span>·</span>
+      <span class="deck-card__dot">·</span>
       <button class="deck-card__time" type="button" data-short="${escapeAttr(shortTime)}" data-full="${escapeAttr(fullTime)}" title="${escapeAttr(fullTime)}">${escapeHtml(shortTime)}</button>
+      <a class="deck-card__domain" href="${escapeAttr(hnFromSiteUrl(host))}" target="_blank" rel="noopener noreferrer">${escapeHtml(host)}</a>
     </p>
+  `;
+}
+
+async function openCommentsPreview(storyId: number): Promise<void> {
+  if (!Number.isFinite(storyId)) return;
+  const dom = tryGetDOM();
+  if (!dom) return;
+  statefulAbortComments(dom);
+  const abort = new AbortController();
+  (window as unknown as { __hnDeckCommentsAbort?: AbortController }).__hnDeckCommentsAbort = abort;
+  dom.commentsTitle.textContent = "Loading comments…";
+  dom.commentsMeta.textContent = "HN comments";
+  dom.commentsBody.innerHTML = `
+    <a class="comments-preview__open" href="${escapeAttr(hnPermalink(storyId))}" target="_blank" rel="noopener noreferrer">Open full thread on HN ↗</a>
+    <p class="deck-empty"><span class="deck-spinner" aria-hidden="true"></span> Loading comments…</p>
+  `;
+  if (dom.commentsDialog.open) dom.commentsDialog.close();
+  if (typeof dom.commentsDialog.showModal === "function") dom.commentsDialog.showModal();
+  else dom.commentsDialog.setAttribute("open", "");
+  try {
+    const preview = await fetchCommentPreview(storyId, abort.signal);
+    dom.commentsTitle.textContent = preview.story.title;
+    dom.commentsMeta.textContent = `${preview.total} ${preview.total === 1 ? "comment" : "comments"}`;
+    dom.commentsBody.innerHTML = `
+      <a class="comments-preview__open" href="${escapeAttr(hnPermalink(preview.story.id))}" target="_blank" rel="noopener noreferrer">Open full thread on HN ↗</a>
+      ${preview.comments.length > 0 ? preview.comments.map((node) => renderCommentPreviewNode(node, 0)).join("") : `<p class="deck-empty">No comments yet.</p>`}
+    `;
+  } catch (err) {
+    if (abort.signal.aborted) return;
+    const message = err instanceof Error ? err.message : String(err);
+    dom.commentsTitle.textContent = "Could not load comments";
+    dom.commentsBody.innerHTML = `
+      <a class="comments-preview__open" href="${escapeAttr(hnPermalink(storyId))}" target="_blank" rel="noopener noreferrer">Open full thread on HN ↗</a>
+      <p class="deck-empty deck-empty--error">${escapeHtml(message)}</p>
+    `;
+  }
+}
+
+function statefulAbortComments(dom: DOM): void {
+  const slot = window as unknown as { __hnDeckCommentsAbort?: AbortController };
+  slot.__hnDeckCommentsAbort?.abort();
+  dom.commentsDialog.addEventListener("close", () => slot.__hnDeckCommentsAbort?.abort(), { once: true });
+}
+
+function renderCommentPreviewNode(node: HNCommentNode, depth: number): string {
+  const by = node.comment.by ?? "unknown";
+  const date = node.comment.time ? new Date(node.comment.time * 1000) : null;
+  const when = date ? relativeTime(date) : "unknown time";
+  const fullTime = date ? formatFullTime(date) : "unknown time";
+  return `
+    <details class="comments-preview__comment" style="--depth:${Math.min(depth, 3)}" open>
+      <summary class="comments-preview__byline"><a href="${escapeAttr(hnUserUrl(by))}" target="_blank" rel="noopener noreferrer">${escapeHtml(by)}</a> · <a href="${escapeAttr(hnPermalink(node.comment.id))}" target="_blank" rel="noopener noreferrer" title="${escapeAttr(fullTime)}">${escapeHtml(when)}</a></summary>
+      <p class="comments-preview__text">${escapeHtml(stripHtml(node.comment.text))}</p>
+      ${node.children.map((child) => renderCommentPreviewNode(child, depth + 1)).join("")}
+    </details>
   `;
 }
 
@@ -1721,6 +1798,38 @@ function toggleColumnFocus(state: AppState, dom: DOM, id: string): void {
   state.focusedColumnId = state.focusedColumnId === id ? null : id;
   applyFocusState(state, dom);
   state.columns.get(id)?.el.scrollIntoView({ behavior: "smooth", inline: "start", block: "nearest" });
+  ensureFocusedColumnBacklog(state, dom);
+}
+
+function ensureFocusedColumnBacklog(state: AppState, dom: DOM): void {
+  const id = state.focusedColumnId;
+  if (!id) return;
+  const runtime = state.columns.get(id);
+  if (!runtime || runtime.backfilling) return;
+  window.requestAnimationFrame(() => void backfillFocusedColumn(state, dom, runtime));
+}
+
+async function backfillFocusedColumn(state: AppState, dom: DOM, runtime: ColumnRuntime): Promise<void> {
+  if (runtime.backfilling) return;
+  runtime.backfilling = true;
+  try {
+    for (let i = 0; i < 4; i++) {
+      if (state.focusedColumnId !== runtime.column.id || columnHasScrollableBacklog(runtime)) break;
+      runtime.sentinel.innerHTML = `<span class="deck-spinner" aria-hidden="true"></span> Loading older…`;
+      if (runtime.column.kind === "raw") {
+        if (!runtime.hasMore || runtime.loading) break;
+        await loadRawBatch(state, runtime);
+        if (!runtime.hasMore) break;
+      } else {
+        if (state.routing) break;
+        const hasMore = await routeNextBatch(state, dom);
+        if (!hasMore) break;
+      }
+      await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+    }
+  } finally {
+    runtime.backfilling = false;
+  }
 }
 
 function applyFocusState(state: AppState, dom: DOM): void {
@@ -1978,6 +2087,11 @@ function exposeOperationalConsoleAPI(state: AppState): void {
       cachedStories: state.storyById.size,
     }),
   };
+}
+
+function formatScore(score: number): string {
+  if (score >= 1000) return `${Math.round(score / 100) / 10}k`;
+  return String(score);
 }
 
 function escapeHtml(s: string): string {

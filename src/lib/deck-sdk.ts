@@ -1,6 +1,5 @@
 /**
- * Deck routing SDK — the calls Nano emits to populate TweetDeck-style
- * columns.
+ * Deck routing SDK — the calls Nano emits to populate HNDeck columns.
  *
  * Nano sees: routing instructions + curated column descriptions + one
  * batch of HN stories. It emits explicit placement decisions. An empty

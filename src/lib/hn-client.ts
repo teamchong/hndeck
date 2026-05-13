@@ -51,6 +51,17 @@ export interface HNComment {
 
 export type HNFeedItem = HNStory | HNComment;
 
+export interface HNCommentNode {
+  comment: HNComment;
+  children: HNCommentNode[];
+}
+
+export interface HNCommentPreview {
+  story: HNStory;
+  comments: HNCommentNode[];
+  total: number;
+}
+
 export type HNFeed = "top" | "new" | "ask" | "show" | "user" | "best-month";
 
 export interface HNFeedOptions {
@@ -157,6 +168,36 @@ export async function fetchItem(id: number, signal?: AbortSignal): Promise<HNFee
   const item = normalizeItem(raw);
   itemCache.set(id, item);
   return item;
+}
+
+export async function fetchCommentPreview(
+  storyId: number,
+  signal?: AbortSignal,
+  opts: { topLevel?: number; depth?: number; repliesPerComment?: number } = {},
+): Promise<HNCommentPreview> {
+  const item = await fetchItem(storyId, signal);
+  if (!item || item.type !== "story") throw new Error("HN item is not a story.");
+  const topLevel = opts.topLevel ?? 12;
+  const depth = opts.depth ?? 2;
+  const repliesPerComment = opts.repliesPerComment ?? 4;
+  const ids = (item.kids ?? []).slice(0, topLevel);
+  const comments = (await Promise.all(ids.map((id) => fetchCommentNode(id, depth, repliesPerComment, signal))))
+    .filter((node): node is HNCommentNode => !!node);
+  return { story: item, comments, total: item.descendants ?? item.kids?.length ?? comments.length };
+}
+
+async function fetchCommentNode(
+  id: number,
+  depth: number,
+  repliesPerComment: number,
+  signal?: AbortSignal,
+): Promise<HNCommentNode | null> {
+  const item = await fetchItem(id, signal);
+  if (!item || item.type !== "comment") return null;
+  const childIds = depth > 0 ? (item.kids ?? []).slice(0, repliesPerComment) : [];
+  const children = (await Promise.all(childIds.map((childId) => fetchCommentNode(childId, depth - 1, repliesPerComment, signal))))
+    .filter((node): node is HNCommentNode => !!node);
+  return { comment: item, children };
 }
 
 /**

@@ -1,6 +1,6 @@
 # HNDeck
 
-TweetDeck for Hacker News, routed by Chrome's on-device Gemini Nano.
+Column-based Hacker News reader, routed by Chrome's on-device Gemini Nano.
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/teamchong/hndeck)
 
@@ -16,7 +16,7 @@ TweetDeck for Hacker News, routed by Chrome's on-device Gemini Nano.
 
 ## Why
 
-Chrome may already have Gemini Nano on disk. HNDeck tries to make that useful: local AI reads small HN batches, applies your preferences, and presents the stories in columns you actually want to scan.
+HNDeck is a personal learning project for Chrome's Prompt API. Chrome may already have Gemini Nano on disk, taking a few GB of space. This project is my attempt to turn that into something useful: local AI reads small Hacker News batches, applies your routing instructions, and presents stories in columns you actually want to scan.
 
 ## Customization
 
