@@ -14,7 +14,7 @@ TweetDeck-style Hacker News reader with on-device AI filtering via Chrome's Gemi
 
 ## Why
 
-Hacker News already decides what you see through upvotes and ranking. HNDeck lets you add your own filter on top: an AI that works for you, not an algorithm that works for everyone. Write "AI News" or "no AI" or "debugging, weird bugs, production incidents" and Nano filters stories locally on your device. No server, no account, no tracking.
+Write a short instruction like "AI News" or "no AI" and Nano filters stories locally on your device. No server, no account, no tracking.
 
 This is a personal learning project for Chrome's Prompt API. Chrome may already have Gemini Nano on disk. This project turns that into something useful.
 
