@@ -342,7 +342,7 @@ export async function fetchSearchStoryBatch(
   const hitsPerPage = Math.max(1, Math.min(100, end - start));
   const page = Math.max(0, Math.floor(start / hitsPerPage));
   const url =
-    `https://hn.algolia.com/api/v1/search_by_date?tags=story` +
+    `https://hn.algolia.com/api/v1/search?tags=story` +
     `&query=${encodeURIComponent(q)}` +
     `&page=${page}` +
     `&hitsPerPage=${hitsPerPage}`;
