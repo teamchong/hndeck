@@ -269,10 +269,21 @@ function createDOMBaseline(): DOMBaseline {
 function readDOMSnapshot(): DOMSnapshot {
   return {
     documentAttributes: readAttributes(document.documentElement),
-    headHTML: "", // never persist <head>; it has deploy-specific hashed assets
+    headHTML: readHeadHTML(),
     bodyAttributes: readAttributes(document.body),
     bodyHTML: document.body?.innerHTML ?? "",
   };
+}
+
+/** Persist <head> but strip hashed build assets that change on deploy. */
+function readHeadHTML(): string {
+  if (!document.head) return "";
+  const template = document.createElement("template");
+  template.innerHTML = document.head.innerHTML;
+  for (const el of template.content.querySelectorAll("link[href*='_astro/'], script[src*='_astro/']")) {
+    el.remove();
+  }
+  return template.innerHTML;
 }
 
 function readAttributes(el: Element | null): [string, string][] {
@@ -294,8 +305,12 @@ async function applyPersistedDOMSnapshot(): Promise<void> {
   }
   const snapshot = await loadDOMSnapshot();
   if (!snapshot) return;
-  // Never restore <head>. It contains build-specific hashed assets
-  // that change on every deploy. Let the fresh HTML provide them.
+  if (document.head && snapshot.headHTML) {
+    // Merge: keep fresh build assets, append persisted user additions.
+    const freshAssets = document.head.querySelectorAll("link[href*='_astro/'], script[src*='_astro/']");
+    document.head.innerHTML = snapshot.headHTML;
+    for (const asset of freshAssets) document.head.appendChild(asset);
+  }
   if (document.body) {
     applyAttributes(document.body, snapshot.bodyAttributes);
     document.body.innerHTML = snapshot.bodyHTML;
@@ -1844,7 +1859,7 @@ function applyCustomCSS(css: string): void {
   if (!el) {
     el = document.createElement("style");
     el.id = CUSTOM_CSS_ID;
-    document.head.appendChild(el);
+    document.body.appendChild(el);
   }
   el.textContent = css;
 }
@@ -1854,7 +1869,7 @@ function applyThemeVars(vars: Record<string, string>): void {
   if (!el) {
     el = document.createElement("style");
     el.id = THEME_VARS_CSS_ID;
-    document.head.appendChild(el);
+    document.body.appendChild(el);
   }
   const lines = Object.entries(vars)
     .filter(([name, value]) => CSS_VAR_NAMES.includes(name as (typeof CSS_VAR_NAMES)[number]) && value.trim())
