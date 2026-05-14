@@ -16,7 +16,9 @@ Column-based Hacker News reader where you decide what to see, not an algorithm.
 
 Hacker News already decides what you see through upvotes and ranking. HNDeck lets you add your own filter on top: an AI that works for you, not an algorithm that works for everyone. Write "AI News" or "no AI" or "debugging, weird bugs, production incidents" and Nano filters stories locally on your device. No server, no account, no tracking.
 
-This is also a personal learning project for Chrome's Prompt API. Chrome may already have Gemini Nano on disk. This project turns that into something useful.
+This is a personal learning project for Chrome's Prompt API. Chrome may already have Gemini Nano on disk. This project turns that into something useful.
+
+Nano is a small on-device model so the filtering is not perfect. I tried many other ideas for what to build with the Prompt API and this is the closest I got to something that kind of works.
 
 ## Customization
 
