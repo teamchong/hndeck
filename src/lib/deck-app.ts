@@ -1545,7 +1545,11 @@ async function openCommentsPreview(storyId: number): Promise<void> {
   openDialog(dom.commentsDialog);
   try {
     const preview = await fetchCommentPreview(storyId, abort.signal);
-    dom.commentsTitle.textContent = preview.story.title;
+    if (preview.story.url) {
+      dom.commentsTitle.innerHTML = `<a href="${escapeAttr(preview.story.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(preview.story.title)}</a>`;
+    } else {
+      dom.commentsTitle.textContent = preview.story.title;
+    }
     dom.commentsMeta.textContent = `${preview.total} ${preview.total === 1 ? "comment" : "comments"}`;
     const storyBody = preview.story.text ? `<div class="comments-preview__body">${escapeHtml(stripHtml(preview.story.text))}</div>` : "";
     dom.commentsBody.innerHTML = `
