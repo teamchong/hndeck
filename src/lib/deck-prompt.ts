@@ -35,7 +35,7 @@ export function buildSourceFilterSystemPrompt(opts: SourceFilterPromptOptions): 
     ...(global ? [`  <global>${esc(global)}</global>`] : []),
     "</B>",
     "",
-    "Is the main topic of A directly about B? <YES or NO> reason",
+    "Is the main topic of A directly about B? YES or NO.",
   ].join("\n");
 }
 

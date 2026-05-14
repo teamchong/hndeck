@@ -964,6 +964,8 @@ async function filterStories(state: AppState, runtime: ColumnRuntime, stories: H
   return stories.filter((item) => state.sourceFilterDecisions.get(filterCacheKey(runtime.column, item.id)) === true);
 }
 
+const filterDebug = new URLSearchParams(window.location.search).has("debug");
+
 async function filterSingleItem(state: AppState, runtime: ColumnRuntime, item: HNFeedItem): Promise<void> {
   const key = filterCacheKey(runtime.column, item.id);
   if (state.sourceFilterDecisions.has(key)) return;
@@ -980,14 +982,18 @@ async function filterSingleItem(state: AppState, runtime: ColumnRuntime, item: H
     });
     const decision = parseBooleanFilterOutput(output);
     if (decision !== null) {
-      const title = "title" in item ? item.title : `item:${item.id}`;
-      console.log(`[filter] ${runtime.column.title} | ${title} | ${decision ? "YES" : "NO"} | ${output.trim()}`);
+      if (filterDebug) {
+        const title = "title" in item ? item.title : `item:${item.id}`;
+        console.log(`[filter] ${runtime.column.title} | ${title} | ${decision ? "YES" : "NO"} | ${output.trim().slice(0, 80)}`);
+      }
       setFilterDecision(state, key, decision);
       return;
     }
   }
-  const title = "title" in item ? item.title : `item:${item.id}`;
-  console.log(`[filter] ${runtime.column.title} | ${title} | FAIL | gave up after 3 attempts`);
+  if (filterDebug) {
+    const title = "title" in item ? item.title : `item:${item.id}`;
+    console.log(`[filter] ${runtime.column.title} | ${title} | FAIL`);
+  }
   setFilterDecision(state, key, false);
 }
 
