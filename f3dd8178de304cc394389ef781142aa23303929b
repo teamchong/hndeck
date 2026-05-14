@@ -1,0 +1,23 @@
+src/pages/index.astro
+  b454f51a6892b0b3 10
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "f3dd8178de304cc394389ef781142aa23303929b",
+  "prompts": {
+    "b454f51a6892b0b3": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_1f8770333ffeLL89wAhppx4N8y",
+        "model": "anthropic/claude-opus-4-7"
+      },
+      "human_author": "Steven Chong",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 0,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    }
+  }
+}
