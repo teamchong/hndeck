@@ -869,6 +869,8 @@ async function loadBatch(state: AppState, runtime: ColumnRuntime): Promise<void>
   renderColumnWaitingMessage(state, runtime);
   try {
     let added = 0;
+    let emptyBatches = 0;
+    const MAX_EMPTY_BATCHES = 10;
     do {
       const batch = await fetchFeedStoryBatch(
         columnFeed(runtime.column),
@@ -883,6 +885,7 @@ async function loadBatch(state: AppState, runtime: ColumnRuntime): Promise<void>
         return;
       }
       const stories = await filterStories(state, runtime, batch.stories);
+      let batchAdded = 0;
       for (const story of stories) {
         if (runtime.body.querySelector(`[data-story-id="${story.id}"]`)) continue;
         state.storyById.set(story.id, story);
@@ -890,13 +893,15 @@ async function loadBatch(state: AppState, runtime: ColumnRuntime): Promise<void>
         if (added === 0) clearColumnMessage(runtime);
         runtime.body.appendChild(renderStoryCard(story));
         added++;
+        batchAdded++;
       }
       runtime.cursor += BATCH;
       runtime.hasMore = batch.hasMore;
-      if (shouldScanMore(runtime)) {
+      emptyBatches = batchAdded === 0 ? emptyBatches + 1 : 0;
+      if (shouldScanMore(runtime, added, emptyBatches, MAX_EMPTY_BATCHES)) {
         runtime.sentinel.textContent = `Scanning older ${runtime.column.source} stories…`;
       }
-    } while (shouldScanMore(runtime));
+    } while (shouldScanMore(runtime, added, emptyBatches, MAX_EMPTY_BATCHES));
     if (visibleCardCount(runtime) === 0 && !runtime.hasMore) renderColumnMessage(runtime, "No matching items found for this column.");
     runtime.sentinel.textContent = runtime.hasMore ? "Scroll for more" : endOfFeedLabel(runtime.column);
     if (added === 0 && runtime.hasMore) runtime.sentinel.textContent = "Scroll for more matches";
@@ -910,10 +915,13 @@ async function loadBatch(state: AppState, runtime: ColumnRuntime): Promise<void>
   }
 }
 
-function shouldScanMore(runtime: ColumnRuntime): boolean {
-  return !!runtime.column.instruction?.trim() &&
-    runtime.hasMore &&
-    !columnHasScrollableBacklog(runtime);
+function shouldScanMore(runtime: ColumnRuntime, added: number, emptyBatches: number, maxEmpty: number): boolean {
+  if (!runtime.hasMore) return false;
+  if (!runtime.column.instruction?.trim()) return false;
+  if (emptyBatches >= maxEmpty) return false;
+  // Keep scanning if we haven't added anything yet, or backlog isn't scrollable yet.
+  if (added === 0) return true;
+  return !columnHasScrollableBacklog(runtime);
 }
 
 function columnHasScrollableBacklog(runtime: ColumnRuntime): boolean {
