@@ -145,6 +145,7 @@ interface AppState {
   deckStructureObserver?: MutationObserver;
   domSnapshotObserver?: MutationObserver;
   customCSSObserver?: MutationObserver;
+  themeVarsObserver?: MutationObserver;
   cssVarWatchTimer?: number;
   filterCacheTimer: number | null;
   commentsAbort?: AbortController;
@@ -236,6 +237,8 @@ async function startDeckAppAsync(): Promise<void> {
   applyThemeVars(state.themeVars);
   observeCSSVarEdits(state);
   applyCustomCSS(state.customCSS);
+  observeCustomCSSEdits(state);
+  observeThemeVarsEdits(state);
   renderDeck(state, dom);
   bindCoreControls(state, dom);
   markAppReady();
@@ -1319,6 +1322,7 @@ async function reconcileAndPersistDOMSnapshot(state: AppState, baseline: DOMBase
       observeColumnTitleEdits(state, dom);
       observeDeckStructureEdits(state, dom);
       observeCustomCSSEdits(state);
+      observeThemeVarsEdits(state);
     }
     await persistDOMSnapshotNow();
   } finally {
@@ -2041,6 +2045,25 @@ function observeCustomCSSEdits(state: AppState): void {
   });
   observer.observe(el, { childList: true, characterData: true, subtree: true });
   state.customCSSObserver = observer;
+}
+
+function observeThemeVarsEdits(state: AppState): void {
+  state.themeVarsObserver?.disconnect();
+  const el = document.getElementById(THEME_VARS_CSS_ID) as HTMLStyleElement | null;
+  if (!el) return;
+  const observer = new MutationObserver(() => {
+    const text = el.textContent ?? "";
+    const vars: Record<string, string> = {};
+    for (const match of text.matchAll(/(--[\w-]+)\s*:\s*([^;]+)/g)) {
+      const name = match[1];
+      const value = match[2].trim();
+      if (CSS_VAR_NAMES.includes(name as (typeof CSS_VAR_NAMES)[number])) vars[name] = value;
+    }
+    state.themeVars = vars;
+    queuePersistState(state);
+  });
+  observer.observe(el, { childList: true, characterData: true, subtree: true });
+  state.themeVarsObserver = observer;
 }
 
 function isStringRecord(x: unknown): x is Record<string, string> {
