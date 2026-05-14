@@ -17,6 +17,7 @@
 export type GuideReason =
   | { kind: "wrong-browser"; browser: string }
   | { kind: "mobile" }
+  | { kind: "remote-browser" }
   | { kind: "old-chrome"; version: number }
   | { kind: "api-missing" }                // Chrome OK but `LanguageModel` undefined
   | { kind: "model-unavailable"; reason: string }; // availability returned "unavailable"
@@ -75,11 +76,22 @@ export function detectBrowser(): BrowserInfo {
  * instructions. `availabilityReason` is whatever `availability()` told
  * us, used as the model-unavailable fallback.
  */
+export function detectRemoteBrowser(): boolean {
+  // Cloudflare Browser Isolation injects #ime-div for input handling.
+  if (document.getElementById("ime-div")) return true;
+  // BISO connects via edge.browser.run WebRTC.
+  if (document.querySelector("script[src*='browser.run']")) return true;
+  return false;
+}
+
 export function classifyFailure(
   info: BrowserInfo,
   apiPresent: boolean,
   availabilityReason: string,
 ): GuideReason {
+  // Remote/isolated browser (e.g. Cloudflare BISO).
+  if (detectRemoteBrowser()) return { kind: "remote-browser" };
+
   // Mobile is a hard no for now.
   if (info.isMobile || info.os === "ios" || info.os === "android") {
     return { kind: "mobile" };
@@ -136,11 +148,24 @@ export function guideContentFor(reason: GuideReason): GuideContent {
         ],
       };
 
+    case "remote-browser":
+      return {
+        title: "Remote browser detected",
+        intro:
+          "This page is being rendered through a remote browser (e.g. Cloudflare Browser Isolation). " +
+          "Gemini Nano requires a local Chrome installation with the model on disk. " +
+          "The standard HN columns still work. To use AI filtering, open this page in a local browser.",
+        steps: [
+          "Open this URL directly in Chrome on your own machine (not through a VPN/proxy that uses remote browsing).",
+          "Make sure Chrome 138+ is installed with Gemini Nano enabled.",
+        ],
+      };
+
     case "wrong-browser":
       return {
         title: `${reason.browser} doesn't have built-in AI yet`,
         intro:
-          "This demo uses Chrome's built-in Prompt API (Gemini Nano). It's currently a Chromium-only feature.",
+          "AI filtering uses Chrome's built-in Prompt API (Gemini Nano). The standard HN columns work in any browser.",
         steps: [
           "Install Google Chrome 138 or newer: <a href=\"https://www.google.com/chrome/\" target=\"_blank\" rel=\"noopener\">google.com/chrome</a>.",
           "Reopen this page in Chrome.",
