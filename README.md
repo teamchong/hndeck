@@ -1,6 +1,6 @@
 # HNDeck
 
-Column-based Hacker News reader where you decide what to see, not an algorithm.
+TweetDeck-style Hacker News reader with on-device AI filtering via Chrome's Gemini Nano, personal learning project.
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/teamchong/hndeck)
 

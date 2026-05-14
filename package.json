@@ -1,5 +1,6 @@
 {
   "name": "hndeck",
+  "description": "TweetDeck-style Hacker News reader with on-device AI filtering via Chrome's Gemini Nano, personal learning project",
   "type": "module",
   "version": "0.0.1",
   "repository": {
