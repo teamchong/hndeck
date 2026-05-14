@@ -1863,9 +1863,10 @@ function applyCustomCSS(css: string): void {
   if (!el) {
     el = document.createElement("style");
     el.id = CUSTOM_CSS_ID;
-    document.body.appendChild(el);
   }
   el.textContent = css;
+  // Always last in body so it overrides app CSS and theme vars.
+  document.body.appendChild(el);
 }
 
 function applyThemeVars(vars: Record<string, string>): void {
@@ -1873,8 +1874,11 @@ function applyThemeVars(vars: Record<string, string>): void {
   if (!el) {
     el = document.createElement("style");
     el.id = THEME_VARS_CSS_ID;
-    document.body.appendChild(el);
   }
+  // Append before custom CSS but after app CSS.
+  const customEl = document.getElementById(CUSTOM_CSS_ID);
+  if (customEl) document.body.insertBefore(el, customEl);
+  else document.body.appendChild(el);
   const lines = Object.entries(vars)
     .filter(([name, value]) => CSS_VAR_NAMES.includes(name as (typeof CSS_VAR_NAMES)[number]) && value.trim())
     .map(([name, value]) => `  ${name}: ${value};`);
@@ -1901,7 +1905,6 @@ function observeCSSVarEdits(state: AppState): void {
     }
     if (changed) {
       last = current;
-      applyThemeVars(state.themeVars);
       queuePersistState(state);
     }
   }, 600);
