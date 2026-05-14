@@ -1,20 +1,17 @@
 # HNDeck
 
-TweetDeck-style Hacker News reader with on-device AI filtering via Chrome's Gemini Nano, personal learning project.
+TweetDeck-style Hacker News reader, built to experiment with Chrome's Prompt API.
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/teamchong/hndeck)
 
 ## What It Is
 
-- Define Hacker News columns in plain English.
-- Standard columns pull from HN feeds: Top, New, Ask, Show, user submissions, best this month, or search.
-- Custom columns scan all of HN and use Gemini Nano to filter each story against your instruction. On-device, private, free.
-- Any column can have a custom instruction. Nano evaluates each story one at a time: keep or reject.
-- Your instructions, layout, and customization never leave your browser.
+- Columns for Top, New, Ask, Show, Jobs, user submissions, best this month, and search.
+- Custom columns scan all of HN and use Gemini Nano to filter each story against your instruction.
+- Nano evaluates each story one at a time, on-device. No data is sent to any server.
+- Your instructions, layout, and customization stay in your browser (OPFS).
 
 ## Why
-
-Write a short instruction like "AI News" or "no AI" and Nano filters stories locally on your device. No server, no account, no tracking.
 
 This is a personal learning project for Chrome's Prompt API. Chrome may already have Gemini Nano on disk. This project turns that into something useful.
 
@@ -27,7 +24,7 @@ HNDeck is intentionally editable from DevTools.
 - Edit DOM or CSS directly in the browser.
 - HNDeck saves a page snapshot to OPFS.
 - On reload, it restores your snapshot, then rerenders app-owned regions like deck columns, column order, instructions, and live story cards.
-- Reset with `await hnDeck.resetLayout()` or the Customize dialog's Reset layout button.
+- Reset with `await hnDeck.resetLayout()`, the Customize dialog's Reset layout button, or visit `?reset`.
 
 ## Browser Requirements
 
@@ -49,7 +46,6 @@ pnpm install
 pnpm dev      # http://localhost:4330
 pnpm check
 pnpm build
-pnpm preview
 ```
 
 ## Deploy
@@ -57,10 +53,9 @@ pnpm preview
 Use the deploy button above, or deploy manually:
 
 ```bash
-pnpm deploy
+pnpm build
+npx wrangler deploy --config dist/server/wrangler.json
 ```
-
-That runs `astro build && wrangler deploy`. The Worker name is `hndeck` in `wrangler.jsonc`.
 
 ## How Filtering Works
 
@@ -68,5 +63,5 @@ That runs `astro build && wrangler deploy`. The Worker name is `hndeck` in `wran
 2. If the column has a custom instruction, Nano evaluates each story individually.
 3. The prompt is structured XML with escaped content to prevent injection.
 4. Nano outputs YES or NO. Three attempts, then default reject.
-5. Decisions are cached in memory: same column + same instruction + same story = reuse.
-6. No story data is sent to any server. Nano runs entirely in the browser.
+5. Decisions are cached in OPFS so they survive reloads.
+6. Nano runs entirely in the browser. No story data is sent to any server.
