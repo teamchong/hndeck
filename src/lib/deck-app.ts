@@ -1,9 +1,7 @@
 /** Column-based HN deck app. */
 
 import {
-  fetchTopStoryBatch,
   fetchFeedStoryBatch,
-  fetchSearchStoryBatch,
   fetchCommentPreview,
   clearHNCache,
   hnFromSiteUrl,
@@ -12,6 +10,8 @@ import {
   hostOf,
   stripHtml,
   type HNFeedItem,
+  type HNStory,
+  type HNFeed,
   type HNCommentNode,
 } from "./hn-client";
 import {
@@ -23,11 +23,10 @@ import {
   removeColumn,
   updateColumn,
   type Column,
+  type ColumnSource,
   type Deck,
 } from "./deck";
-import { DeckRouter, type DeckAction, type DeckSink } from "./deck-sdk";
-import { createDeckExecutor } from "./deck-executor";
-import { buildDeckSystemPrompt, buildDeckUserPrompt, buildSourceFilterSystemPrompt, buildSourceFilterUserPrompt } from "./deck-prompt";
+import { buildSourceFilterSystemPrompt, buildSourceFilterUserPrompt } from "./deck-prompt";
 import { createPromptBus, type PromptBus } from "./prompt-bus";
 import { checkAvailability, createSession, type ModelStatus } from "./prompt-api";
 import { classifyFailure, detectBrowser, guideContentFor, type GuideContent } from "./setup-guide";
@@ -42,6 +41,7 @@ const APP_CSS_ID = "hn-deck-app-css";
 const CUSTOM_CSS_ID = "hn-deck-custom-css";
 const THEME_VARS_CSS_ID = "hn-deck-theme-vars";
 const DROP_PLACEHOLDER_ID = "deck-column-drop-placeholder";
+const SOURCE_FILTER_CACHE_VERSION = "v4";
 const CSS_VAR_NAMES = [
   "--bg",
   "--bg-2",
@@ -69,6 +69,12 @@ interface DOM {
   status: HTMLElement;
   deck: HTMLElement;
   instructionsBox: HTMLTextAreaElement;
+  searchBtn: HTMLButtonElement;
+  searchDialog: HTMLDialogElement;
+  searchClose: HTMLButtonElement;
+  searchForm: HTMLFormElement;
+  searchInput: HTMLInputElement;
+  searchMeta: HTMLElement;
   addColumnBtn: HTMLButtonElement;
   setupBanner: HTMLElement;
   setupTitle: HTMLElement;
@@ -78,13 +84,13 @@ interface DOM {
   setupPct: HTMLElement;
   setupBegin: HTMLButtonElement;
   setupRetry: HTMLButtonElement;
+  setupDismiss: HTMLButtonElement;
   setupSteps: HTMLElement;
   setupVerify: HTMLAnchorElement;
   columnDialog: HTMLDialogElement;
   columnTitle: HTMLInputElement;
-  columnKind: HTMLSelectElement;
-  columnSourceParam: HTMLInputElement;
-  columnPredicate: HTMLTextAreaElement;
+  columnSource: HTMLSelectElement;
+  columnInstruction: HTMLTextAreaElement;
   columnSave: HTMLButtonElement;
   columnCancel: HTMLButtonElement;
   columnClose: HTMLButtonElement;
@@ -104,8 +110,6 @@ interface ColumnRuntime {
   topStatus: HTMLElement;
   sentinel: HTMLElement;
   cursor: number;
-  searchCursor: number;
-  searchFallback: boolean;
   loading: boolean;
   backfilling: boolean;
   topRefreshing: boolean;
@@ -124,10 +128,7 @@ interface AppState {
   promptBus: PromptBus;
   routingInstructions: string;
   modelReady: boolean;
-  routingCursor: number;
-  routing: boolean;
-  /** True while rendering cards from a Nano routing/polling pass. */
-  markingFresh: boolean;
+  setupDismissed: boolean;
   uiSize: UISize;
   focusedColumnId: string | null;
   editingColumnId: string | null;
@@ -154,6 +155,7 @@ interface AppState {
 interface PersistedState {
   deck: Deck;
   routingInstructions: string;
+  setupDismissed: boolean;
   uiSize: UISize;
   mastheadTitle: string;
   mastheadSubtitle: string;
@@ -174,6 +176,15 @@ interface DOMBaseline extends DOMSnapshot {
   bodyTemplate: HTMLTemplateElement;
 }
 
+// ─── Map column source → HN feed ────────────────────────────────────
+
+function columnFeed(column: Column): HNFeed {
+  if (column.source === "custom") return "all";
+  return column.source;
+}
+
+// ─── Boot ────────────────────────────────────────────────────────────
+
 export async function startDeckApp(): Promise<void> {
   try {
     await startDeckAppAsync();
@@ -193,6 +204,7 @@ async function startDeckAppAsync(): Promise<void> {
   await applyPersistedDOMSnapshot();
   ensureCoreDOM(baseline);
   const dom = getDOM();
+  const persistenceAvailable = await isPersistenceAvailable();
   const persisted = await loadPersistedState();
   const state: AppState = {
     deck: persisted?.deck ?? defaultDeck(),
@@ -203,9 +215,7 @@ async function startDeckAppAsync(): Promise<void> {
     promptBus: createPromptBus(),
     routingInstructions: persisted?.routingInstructions ?? "",
     modelReady: false,
-    routingCursor: 0,
-    routing: false,
-    markingFresh: false,
+    setupDismissed: persisted?.setupDismissed ?? false,
     uiSize: persisted?.uiSize ?? "normal",
     focusedColumnId: null,
     editingColumnId: null,
@@ -228,10 +238,12 @@ async function startDeckAppAsync(): Promise<void> {
   applyThemeVars(state.themeVars);
   observeCSSVarEdits(state);
   applyCustomCSS(state.customCSS);
-  observeCustomCSSEdits(state);
   renderDeck(state, dom);
   bindCoreControls(state, dom);
   markAppReady();
+  if (!persistenceAvailable) {
+    setStatus(dom, "This browser does not support OPFS persistence here. Layout/customization changes will reset on reload.", "warn");
+  }
   window.addEventListener("resize", () => updateDeckOverflowState(dom));
   void bootstrap(state, dom);
   exposeOperationalConsoleAPI(state);
@@ -246,6 +258,8 @@ function markAppReady(): void {
   document.body.dataset.appReady = "true";
   window.setTimeout(() => document.getElementById("boot-loading")?.remove(), 250);
 }
+
+// ─── DOM baseline / snapshot ─────────────────────────────────────────
 
 function createDOMBaseline(): DOMBaseline {
   const snapshot = readDOMSnapshot();
@@ -310,6 +324,8 @@ function readPersistedAttributes(value: unknown): [string, string][] {
   );
 }
 
+// ─── Core DOM repair ─────────────────────────────────────────────────
+
 function ensureCoreDOM(baseline: DOMBaseline): void {
   let html = document.documentElement;
   if (!html) {
@@ -322,17 +338,18 @@ function ensureCoreDOM(baseline: DOMBaseline): void {
   ensureTopbar(baseline);
   const main = ensureMain(baseline);
   ensureChildElement("status", main, baseline);
-  ensureChildElement("setup-banner", main, baseline);
+  ensureChildElementWithChildren("setup-banner", main, ["setup-title", "setup-detail", "setup-begin", "setup-retry", "setup-dismiss"], baseline);
   ensureChildElement("deck", main, baseline);
   ensureDialogWithChildren("about-dialog", ["about-close"], baseline);
   ensureDialogWithChildren("editor-dialog", ["editor-close", "editor-done", "routing-instructions", "ui-size-btn", "reset-state"], baseline);
-  ensureDialogWithChildren("column-dialog", ["column-close", "column-title", "column-kind", "column-source-param", "column-predicate", "column-save", "column-cancel"], baseline);
+  ensureDialogWithChildren("column-dialog", ["column-close", "column-title", "column-source", "column-instruction", "column-save", "column-cancel"], baseline);
   ensureDialogWithChildren("comments-dialog", ["comments-close", "comments-title", "comments-meta", "comments-body"], baseline);
+  ensureDialogWithChildren("search-dialog", ["search-close", "search-form", "search-input", "search-meta"], baseline);
   ensureAppCSS(baseline);
 }
 
 function ensureTopbar(baseline: DOMBaseline): void {
-  const required = ["add-column-btn", "editor-btn", "about-btn", "github-link"];
+  const required = ["search-btn", "add-column-btn", "editor-btn", "about-btn", "github-link"];
   const current = document.querySelector<HTMLElement>(".topbar");
   const next = cloneBaselineElement<HTMLElement>(baseline, ".topbar");
   const currentVersion = current?.dataset.appVersion ?? "";
@@ -361,6 +378,18 @@ function ensureChildElement(id: string, parent: HTMLElement, baseline: DOMBaseli
   return next;
 }
 
+function ensureChildElementWithChildren(id: string, parent: HTMLElement, childIds: string[], baseline: DOMBaseline): HTMLElement {
+  const existing = document.getElementById(id) as HTMLElement | null;
+  const next = cloneBaselineElement<HTMLElement>(baseline, `#${id}`) ?? document.createElement("div");
+  const currentVersion = existing?.dataset.appVersion ?? "";
+  const baselineVersion = next.dataset.appVersion ?? "";
+  if (existing && childIds.every((childId) => document.getElementById(childId)) && currentVersion === baselineVersion) return existing;
+  next.id = id;
+  existing?.remove();
+  parent.appendChild(next);
+  return next;
+}
+
 function ensureDialogWithChildren(id: string, childIds: string[], baseline: DOMBaseline): void {
   const current = document.getElementById(id) as HTMLElement | null;
   const next = cloneBaselineElement<HTMLElement>(baseline, `#${id}`);
@@ -384,6 +413,8 @@ function ensureAppCSS(baseline: DOMBaseline): void {
   document.body.appendChild(next);
 }
 
+// ─── DOM getters ─────────────────────────────────────────────────────
+
 function getDOM(): DOM {
   const get = <T extends HTMLElement>(id: string): T => {
     const el = document.getElementById(id);
@@ -394,6 +425,12 @@ function getDOM(): DOM {
     status: get("status"),
     deck: get("deck"),
     instructionsBox: get<HTMLTextAreaElement>("routing-instructions"),
+    searchBtn: get<HTMLButtonElement>("search-btn"),
+    searchDialog: get<HTMLDialogElement>("search-dialog"),
+    searchClose: get<HTMLButtonElement>("search-close"),
+    searchForm: get<HTMLFormElement>("search-form"),
+    searchInput: get<HTMLInputElement>("search-input"),
+    searchMeta: get("search-meta"),
     addColumnBtn: get<HTMLButtonElement>("add-column-btn"),
     setupBanner: get("setup-banner"),
     setupTitle: get("setup-title"),
@@ -403,13 +440,13 @@ function getDOM(): DOM {
     setupPct: get("setup-pct"),
     setupBegin: get<HTMLButtonElement>("setup-begin"),
     setupRetry: get<HTMLButtonElement>("setup-retry"),
+    setupDismiss: get<HTMLButtonElement>("setup-dismiss"),
     setupSteps: get("setup-steps"),
     setupVerify: get<HTMLAnchorElement>("setup-verify"),
     columnDialog: get<HTMLDialogElement>("column-dialog"),
     columnTitle: get<HTMLInputElement>("column-title"),
-    columnKind: get<HTMLSelectElement>("column-kind"),
-    columnSourceParam: get<HTMLInputElement>("column-source-param"),
-    columnPredicate: get<HTMLTextAreaElement>("column-predicate"),
+    columnSource: get<HTMLSelectElement>("column-source"),
+    columnInstruction: get<HTMLTextAreaElement>("column-instruction"),
     columnSave: get<HTMLButtonElement>("column-save"),
     columnCancel: get<HTMLButtonElement>("column-cancel"),
     columnClose: get<HTMLButtonElement>("column-close"),
@@ -436,6 +473,8 @@ function syncAppOwnedControls(state: AppState, dom: DOM): void {
   updateUISizeButton(state, dom);
 }
 
+// ─── Control wiring ──────────────────────────────────────────────────
+
 function bindCoreControls(state: AppState, dom: DOM): void {
   dom.instructionsBox.oninput = () => {
     state.routingInstructions = dom.instructionsBox.value;
@@ -443,9 +482,23 @@ function bindCoreControls(state: AppState, dom: DOM): void {
   };
   dom.setupBegin.onclick = () => void beginModelDownload(state, dom);
   dom.setupRetry.onclick = () => void bootstrap(state, dom);
+  dom.setupDismiss.onclick = () => {
+    state.setupDismissed = true;
+    queuePersistState(state);
+    setSetup(dom, { kind: "hidden" }, state);
+  };
   dom.uiSizeBtn.onclick = () => toggleUISize(state, dom);
+  dom.searchBtn.onclick = () => openSearchDialog(dom);
+  dom.searchClose.onclick = () => closeDialog(dom.searchDialog);
+  dom.searchDialog.onclick = (ev) => {
+    if (ev.target === dom.searchDialog) closeDialog(dom.searchDialog);
+  };
+  dom.searchForm.onsubmit = (ev) => {
+    ev.preventDefault();
+    createSearchColumn(state, dom);
+  };
   dom.addColumnBtn.onclick = () => openColumnDialog(state, dom, null);
-  dom.columnKind.onchange = () => syncColumnKindState(dom, true);
+  dom.columnSource.onchange = () => syncColumnSourceState(dom, true);
   dom.columnSave.onclick = () => saveColumnDialog(state, dom);
   dom.columnCancel.onclick = () => closeColumnDialog(state, dom);
   dom.columnClose.onclick = () => closeColumnDialog(state, dom);
@@ -453,9 +506,9 @@ function bindCoreControls(state: AppState, dom: DOM): void {
   dom.columnDialog.onclick = (ev) => {
     if (ev.target === dom.columnDialog) closeColumnDialog(state, dom);
   };
-  dom.commentsClose.onclick = () => dom.commentsDialog.close();
+  dom.commentsClose.onclick = () => closeDialog(dom.commentsDialog);
   dom.commentsDialog.onclick = (ev) => {
-    if (ev.target === dom.commentsDialog) dom.commentsDialog.close();
+    if (ev.target === dom.commentsDialog) closeDialog(dom.commentsDialog);
   };
   wireDialogControls("about-dialog", "about-btn", "about-close");
   wireDialogControls("editor-dialog", "editor-btn", "editor-close", "editor-done");
@@ -465,7 +518,16 @@ function bindCoreControls(state: AppState, dom: DOM): void {
 function bindKeyboardShortcuts(state: AppState, dom: DOM): void {
   document.onkeydown = (ev) => {
     if (isTypingTarget(ev.target)) return;
-    if (document.querySelector("dialog[open]") && ev.key !== "?") return;
+    if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === "k") {
+      ev.preventDefault();
+      openSearchDialog(dom);
+      return;
+    }
+    if (ev.key === "Escape" && closeTopDialog()) {
+      ev.preventDefault();
+      return;
+    }
+    if (isAnyDialogOpen() && ev.key !== "?") return;
     if (ev.key === "n") {
       ev.preventDefault();
       openColumnDialog(state, dom, null);
@@ -486,23 +548,77 @@ function isTypingTarget(target: EventTarget | null): boolean {
   return target.isContentEditable || tag === "input" || tag === "textarea" || tag === "select";
 }
 
+// ─── Dialog helpers ──────────────────────────────────────────────────
+
 function wireDialogControls(dialogId: string, openBtnId: string, closeBtnId: string, doneBtnId?: string): void {
   const dlg = document.getElementById(dialogId) as HTMLDialogElement | null;
   const openBtn = document.getElementById(openBtnId) as HTMLElement | null;
   const closeBtn = document.getElementById(closeBtnId) as HTMLElement | null;
   const doneBtn = doneBtnId ? document.getElementById(doneBtnId) as HTMLElement | null : null;
   if (!dlg || !openBtn) return;
-  openBtn.onclick = () => {
-    if (dlg.open) dlg.close();
-    if (typeof dlg.showModal === "function") dlg.showModal();
-    else dlg.setAttribute("open", "");
-  };
-  closeBtn && (closeBtn.onclick = () => dlg.close());
-  doneBtn && (doneBtn.onclick = () => dlg.close());
+  openBtn.onclick = () => openDialog(dlg);
+  closeBtn && (closeBtn.onclick = () => closeDialog(dlg));
+  doneBtn && (doneBtn.onclick = () => closeDialog(dlg));
   dlg.onclick = (ev) => {
-    if (ev.target === dlg) dlg.close();
+    if (ev.target === dlg) closeDialog(dlg);
   };
 }
+
+function openDialog(dlg: HTMLDialogElement): void {
+  dlg.dataset.dialogOpen = "true";
+  dlg.setAttribute("aria-modal", "true");
+  window.setTimeout(() => dlg.querySelector<HTMLElement>("button, a, input, textarea, select")?.focus(), 0);
+}
+
+function closeDialog(dlg: HTMLDialogElement): void {
+  if (!dlg.dataset.dialogOpen) return;
+  delete dlg.dataset.dialogOpen;
+  dlg.removeAttribute("aria-modal");
+  dlg.dispatchEvent(new Event("close"));
+}
+
+function isAnyDialogOpen(): boolean {
+  return document.querySelector('dialog[data-dialog-open="true"]') !== null;
+}
+
+function closeTopDialog(): boolean {
+  const dialogs = Array.from(document.querySelectorAll<HTMLDialogElement>('dialog[data-dialog-open="true"]'));
+  const dlg = dialogs.at(-1);
+  if (!dlg) return false;
+  closeDialog(dlg);
+  return true;
+}
+
+// ─── Search ──────────────────────────────────────────────────────────
+
+function openSearchDialog(dom: DOM): void {
+  dom.searchMeta.textContent = "Create a search column";
+  openDialog(dom.searchDialog);
+  window.setTimeout(() => dom.searchInput.focus(), 0);
+}
+
+function createSearchColumn(state: AppState, dom: DOM): void {
+  const query = dom.searchInput.value.trim();
+  if (!query) {
+    dom.searchMeta.textContent = "Enter a query first";
+    return;
+  }
+  const id = newColumnId();
+  state.deck = addColumn(state.deck, {
+    id,
+    title: query,
+    source: "search",
+    feedQuery: query,
+  });
+  state.focusedColumnId = id;
+  dom.searchInput.value = "";
+  queuePersistState(state);
+  void persistStateNow(state);
+  closeDialog(dom.searchDialog);
+  renderDeck(state, dom);
+}
+
+// ─── Status / setup banner ───────────────────────────────────────────
 
 function setStatus(dom: DOM, text: string, kind: "info" | "warn" | "error" = "info"): void {
   dom.status.textContent = text;
@@ -516,7 +632,11 @@ type SetupState =
   | { kind: "downloading"; progress: number }
   | { kind: "guide"; content: GuideContent };
 
-function setSetup(dom: DOM, s: SetupState): void {
+function setSetup(dom: DOM, s: SetupState, state?: AppState): void {
+  if (state?.setupDismissed && s.kind !== "hidden" && s.kind !== "downloading") {
+    dom.setupBanner.hidden = true;
+    return;
+  }
   if (s.kind === "hidden") {
     dom.setupBanner.hidden = true;
     return;
@@ -526,16 +646,18 @@ function setSetup(dom: DOM, s: SetupState): void {
   dom.setupPct.hidden = true;
   dom.setupBegin.hidden = true;
   dom.setupRetry.hidden = true;
+  dom.setupDismiss.hidden = false;
   dom.setupSteps.hidden = true;
   dom.setupVerify.hidden = true;
 
   if (s.kind === "begin") {
     dom.setupTitle.textContent = "Gemini Nano isn't downloaded yet";
-    dom.setupDetail.textContent = "Raw HN columns work now. Enable Nano to let your on-device editor route stories into custom columns.";
+    dom.setupDetail.textContent = "Standard HN columns work now. Enable Nano to filter stories with custom instructions.";
     dom.setupBegin.hidden = false;
     return;
   }
   if (s.kind === "downloading") {
+    dom.setupDismiss.hidden = true;
     const pct = Math.round(Math.max(0, Math.min(100, s.progress * 100)));
     dom.setupTitle.textContent = "Downloading Gemini Nano…";
     dom.setupDetail.textContent = "First time only; Chrome caches it for future visits.";
@@ -558,45 +680,56 @@ function setSetup(dom: DOM, s: SetupState): void {
   dom.setupRetry.hidden = false;
 }
 
+// ─── Bootstrap / Nano download ───────────────────────────────────────
+
 async function bootstrap(state: AppState, dom: DOM): Promise<void> {
   setStatus(dom, "Loading Hacker News. Checking Nano in the background…");
   const status: ModelStatus = await checkAvailability();
   if (status.kind === "available") {
     state.modelReady = true;
-    setSetup(dom, { kind: "hidden" });
+    setSetup(dom, { kind: "hidden" }, state);
     dom.instructionsBox.disabled = false;
-    setStatus(dom, "Nano is ready. Filling curated columns…");
-    loadNanoFilteredRawColumns(state);
-    void routeUntilFilled(state, dom);
+    setStatus(dom, "Nano is ready.");
+    startNanoFilteredColumns(state);
     return;
   }
   if (status.kind === "unsupported") {
     const info = detectBrowser();
-    setSetup(dom, { kind: "guide", content: guideContentFor(classifyFailure(info, false, status.reason)) });
-    setStatus(dom, "Raw columns are available. Nano setup required for routing.");
+    setSetup(dom, { kind: "guide", content: guideContentFor(classifyFailure(info, false, status.reason)) }, state);
+    setStatus(dom, "Standard columns are available. Nano setup required for custom instructions.");
     return;
   }
-  setSetup(dom, { kind: "begin" });
-  setStatus(dom, "Raw columns are available. Nano needs one download before routing.");
+  setSetup(dom, { kind: "begin" }, state);
+  setStatus(dom, "Standard columns are available. Nano needs one download for custom instructions.");
 }
 
 async function beginModelDownload(state: AppState, dom: DOM): Promise<void> {
-  setSetup(dom, { kind: "downloading", progress: 0 });
+  setSetup(dom, { kind: "downloading", progress: 0 }, state);
   try {
-    const warmup = await createSession("Reply ok.", (p) => setSetup(dom, { kind: "downloading", progress: p }));
+    const warmup = await createSession("Reply ok.", (p) => setSetup(dom, { kind: "downloading", progress: p }, state));
     warmup.destroy();
     state.modelReady = true;
-    setSetup(dom, { kind: "hidden" });
+    setSetup(dom, { kind: "hidden" }, state);
     dom.instructionsBox.disabled = false;
-    setStatus(dom, "Nano is ready. Filling curated columns…");
-    loadNanoFilteredRawColumns(state);
-    void routeUntilFilled(state, dom);
+    setStatus(dom, "Nano is ready.");
+    startNanoFilteredColumns(state);
   } catch (err) {
     const info = detectBrowser();
-    setSetup(dom, { kind: "guide", content: guideContentFor(classifyFailure(info, true, err instanceof Error ? err.message : String(err))) });
-    setStatus(dom, "Nano download failed. Raw columns still work.", "error");
+    setSetup(dom, { kind: "guide", content: guideContentFor(classifyFailure(info, true, err instanceof Error ? err.message : String(err))) }, state);
+    setStatus(dom, "Nano download failed. Standard columns still work.", "error");
   }
 }
+
+/** Kick off loading for any column that has an instruction but is still empty. */
+function startNanoFilteredColumns(state: AppState): void {
+  for (const runtime of state.columns.values()) {
+    if (columnNeedsNanoFilter(runtime.column) && getColumnItems(state, runtime.column.id).length === 0) {
+      void loadBatch(state, runtime);
+    }
+  }
+}
+
+// ─── Render deck ─────────────────────────────────────────────────────
 
 function renderDeck(state: AppState, dom: DOM): void {
   for (const rt of state.columns.values()) clearColumnAutoReloadTimer(rt);
@@ -604,18 +737,22 @@ function renderDeck(state: AppState, dom: DOM): void {
   state.columns.clear();
   for (const column of state.deck.columns) {
     const el = document.createElement("section");
-    el.className = `deck-column deck-column--${column.kind}`;
+    el.className = "deck-column";
     el.dataset.columnId = column.id;
     el.innerHTML = `
       <header class="deck-column__header" draggable="true" title="Drag to reorder column">
         <h2 class="deck-column__title">${escapeHtml(column.title)}</h2>
         <div class="deck-column__actions">
-          <button class="deck-column__btn deck-column__btn--edit" data-action="left" title="Move column left" aria-label="Move column left">←</button>
-          <button class="deck-column__btn deck-column__btn--edit" data-action="right" title="Move column right" aria-label="Move column right">→</button>
-          <button class="deck-column__btn deck-column__btn--wide" data-action="reload" title="Change column auto-refresh" aria-label="Change column auto-refresh">${escapeHtml(columnReloadLabel(column))}</button>
-          <button class="deck-column__btn" data-action="focus" title="Focus column" aria-label="Focus column">⛶</button>
-          <button class="deck-column__btn deck-column__btn--edit" data-action="edit" title="Edit column" aria-label="Edit column">✎</button>
-          <button class="deck-column__btn deck-column__btn--edit" data-action="remove" title="Remove column" aria-label="Remove column">×</button>
+          <div class="deck-column__actions-left">
+            <button class="deck-column__btn" data-action="edit" title="Edit column" aria-label="Edit column">✎</button>
+          </div>
+          <div class="deck-column__actions-right">
+            <button class="deck-column__btn deck-column__btn--focus-hidden" data-action="left" title="Move column left" aria-label="Move column left">←</button>
+            <button class="deck-column__btn deck-column__btn--focus-hidden" data-action="right" title="Move column right" aria-label="Move column right">→</button>
+            <button class="deck-column__btn deck-column__btn--wide deck-column__btn--focus-hidden" data-action="reload" title="Change column auto-refresh" aria-label="Change column auto-refresh">${escapeHtml(columnReloadLabel(column))}</button>
+            <button class="deck-column__btn" data-action="focus" title="Focus column" aria-label="Focus column">⛶</button>
+            <button class="deck-column__btn deck-column__btn--focus-hidden" data-action="remove" title="Remove column" aria-label="Remove column" ${columnActionBusy(state, column) ? "disabled" : ""}>×</button>
+          </div>
         </div>
       </header>
       <div class="deck-column__top-status" hidden>Release to refresh</div>
@@ -632,8 +769,6 @@ function renderDeck(state: AppState, dom: DOM): void {
       topStatus,
       sentinel,
       cursor: 0,
-      searchCursor: 0,
-      searchFallback: false,
       loading: false,
       backfilling: false,
       topRefreshing: false,
@@ -652,18 +787,12 @@ function renderDeck(state: AppState, dom: DOM): void {
     el.querySelector<HTMLElement>('[data-action="reload"]')?.addEventListener("click", () => toggleColumnAutoReload(state, dom, column.id));
     el.querySelector<HTMLElement>('[data-action="focus"]')?.addEventListener("click", () => toggleColumnFocus(state, dom, column.id));
     el.querySelector<HTMLElement>('[data-action="edit"]')?.addEventListener("click", () => editColumn(state, dom, column.id));
-    el.querySelector<HTMLElement>('[data-action="remove"]')?.addEventListener("click", () => {
-      state.columnItems.delete(column.id);
-      state.deck = removeColumn(state.deck, column.id);
-      queuePersistState(state);
-      renderDeck(state, dom);
-    });
+    el.querySelector<HTMLElement>('[data-action="remove"]')?.addEventListener("click", () => void removeColumnFromDeck(state, dom, column.id));
 
     body.addEventListener("scroll", () => {
       resetColumnAutoReloadTimer(state, dom, runtime);
       if (body.scrollTop + body.clientHeight >= body.scrollHeight - 240) {
-        if (column.kind === "raw") void loadRawBatch(state, runtime);
-        else void routeNextBatch(state, dom);
+        void loadBatch(state, runtime);
       }
     });
     body.addEventListener("wheel", (ev) => {
@@ -690,14 +819,11 @@ function renderDeck(state: AppState, dom: DOM): void {
       }
     }, { passive: true });
 
-    if (column.kind === "raw") {
-      if (getColumnItems(state, column.id).length === 0) {
-        renderRawColumnWaitingMessage(state, runtime);
-        void loadRawBatch(state, runtime);
-      }
-      else runtime.sentinel.textContent = runtime.hasMore ? "Scroll for more" : endOfFeedLabel(runtime.column);
-    } else if (getColumnItems(state, column.id).length === 0) {
-      renderCuratedEmpty(runtime);
+    if (getColumnItems(state, column.id).length === 0) {
+      renderColumnWaitingMessage(state, runtime);
+      void loadBatch(state, runtime);
+    } else {
+      runtime.sentinel.textContent = runtime.hasMore ? "Scroll for more" : endOfFeedLabel(column);
     }
     bindColumnDragEvents(state, runtime);
     scheduleColumnAutoReload(state, dom, runtime);
@@ -708,6 +834,11 @@ function renderDeck(state: AppState, dom: DOM): void {
   updateDeckOverflowState(dom);
 }
 
+function columnActionBusy(state: AppState, column: Column): boolean {
+  const runtime = state.columns.get(column.id);
+  return !!runtime?.loading || !!runtime?.backfilling || !!runtime?.topRefreshing;
+}
+
 function updateDeckOverflowState(dom: DOM): void {
   requestAnimationFrame(() => {
     const overflowing = dom.deck.scrollWidth > dom.deck.clientWidth + 1;
@@ -715,30 +846,17 @@ function updateDeckOverflowState(dom: DOM): void {
   });
 }
 
-function renderCuratedEmpty(runtime: ColumnRuntime): void {
-  renderColumnMessage(runtime, "Waiting for Nano routing. Once Nano is ready, stories matching this column's description will appear here automatically.");
-  runtime.sentinel.textContent = "Not routed yet";
-}
-
-function loadNanoFilteredRawColumns(state: AppState): void {
-  for (const runtime of state.columns.values()) {
-    if (columnNeedsNanoFilter(runtime.column) && getColumnItems(state, runtime.column.id).length === 0) {
-      void loadRawBatch(state, runtime);
-    }
-  }
-}
+// ─── Column messages ─────────────────────────────────────────────────
 
 function renderColumnMessage(runtime: ColumnRuntime, text: string, kind: "empty" | "error" = "empty"): void {
   runtime.body.innerHTML = `<p class="deck-empty ${kind === "error" ? "deck-empty--error" : ""}">${escapeHtml(text)}</p>`;
 }
 
-function renderRawColumnWaitingMessage(state: AppState, runtime: ColumnRuntime): void {
-  if (runtime.column.kind !== "raw" || !runtime.column.description?.trim() || visibleCardCount(runtime) > 0) return;
-  const message = parseLiteralSourcePredicate(runtime.column.description)
-    ? "Filtering this source. Matching stories will appear here automatically."
-    : state.modelReady
-      ? "Waiting for Nano to filter this source. Matching stories will appear here automatically."
-      : "Waiting for Nano. This source has a prompt filter, so matching stories will appear after Nano is ready.";
+function renderColumnWaitingMessage(state: AppState, runtime: ColumnRuntime): void {
+  if (!runtime.column.instruction?.trim() || visibleCardCount(runtime) > 0) return;
+  const message = state.modelReady
+    ? "Waiting for Nano to filter this source…"
+    : "Waiting for Nano. This column has a custom instruction, so stories will appear after Nano is ready.";
   renderColumnMessage(runtime, message);
 }
 
@@ -746,30 +864,30 @@ function clearColumnMessage(runtime: ColumnRuntime): void {
   runtime.body.querySelector<HTMLElement>(".deck-empty")?.remove();
 }
 
-async function loadRawBatch(state: AppState, runtime: ColumnRuntime): Promise<void> {
+// ─── Load / filter ───────────────────────────────────────────────────
+
+async function loadBatch(state: AppState, runtime: ColumnRuntime): Promise<void> {
   if (runtime.loading || !runtime.hasMore) return;
   runtime.loading = true;
+  setColumnRemoveDisabled(runtime, true);
   runtime.sentinel.innerHTML = `<span class="deck-spinner" aria-hidden="true"></span> Loading more…`;
-  renderRawColumnWaitingMessage(state, runtime);
+  renderColumnWaitingMessage(state, runtime);
   try {
     let added = 0;
     do {
-      const literal = literalSourcePredicate(runtime.column);
-      const batch = runtime.searchFallback && literal
-        ? await fetchSearchStoryBatch(literal.join(" "), runtime.searchCursor, runtime.searchCursor + BATCH)
-        : await fetchFeedStoryBatch(
-          runtime.column.feed ?? "top",
-          runtime.cursor,
-          runtime.cursor + BATCH,
-          undefined,
-          { user: runtime.column.feedUser, month: runtime.column.feedMonth },
-        );
+      const batch = await fetchFeedStoryBatch(
+        columnFeed(runtime.column),
+        runtime.cursor,
+        runtime.cursor + BATCH,
+        undefined,
+        { user: runtime.column.feedUser, month: runtime.column.feedMonth, query: runtime.column.feedQuery },
+      );
       if (columnNeedsNanoFilter(runtime.column) && !state.modelReady) {
-        runtime.sentinel.textContent = "Nano filter not ready";
-        if (visibleCardCount(runtime) === 0) renderColumnMessage(runtime, "This source has a prompt filter. Enable Nano to apply it.");
+        runtime.sentinel.textContent = "Nano not ready";
+        if (visibleCardCount(runtime) === 0) renderColumnMessage(runtime, "This column has a custom instruction. Enable Nano to apply it.");
         return;
       }
-      const stories = await filterSourceStories(state, runtime, batch.stories);
+      const stories = await filterStories(state, runtime, batch.stories);
       for (const story of stories) {
         if (runtime.body.querySelector(`[data-story-id="${story.id}"]`)) continue;
         state.storyById.set(story.id, story);
@@ -778,19 +896,12 @@ async function loadRawBatch(state: AppState, runtime: ColumnRuntime): Promise<vo
         runtime.body.appendChild(renderStoryCard(story));
         added++;
       }
-      if (runtime.searchFallback) runtime.searchCursor += BATCH;
-      else runtime.cursor += BATCH;
+      runtime.cursor += BATCH;
       runtime.hasMore = batch.hasMore;
-      if (!runtime.hasMore && literal && !runtime.searchFallback && !columnHasScrollableBacklog(runtime)) {
-        runtime.searchFallback = true;
-        runtime.hasMore = true;
+      if (shouldScanMore(runtime)) {
+        runtime.sentinel.textContent = `Scanning older ${runtime.column.source} stories…`;
       }
-      if (shouldScanMoreFilteredSource(runtime)) {
-        runtime.sentinel.textContent = runtime.searchFallback
-          ? `Searching older HN stories for ${literal?.join(" ") ?? "matches"}…`
-          : `Scanning older ${runtime.column.feed ?? "top"} stories…`;
-      }
-    } while (shouldScanMoreFilteredSource(runtime));
+    } while (shouldScanMore(runtime));
     if (visibleCardCount(runtime) === 0 && !runtime.hasMore) renderColumnMessage(runtime, "No matching items found for this column.");
     runtime.sentinel.textContent = runtime.hasMore ? "Scroll for more" : endOfFeedLabel(runtime.column);
     if (added === 0 && runtime.hasMore) runtime.sentinel.textContent = "Scroll for more matches";
@@ -800,12 +911,12 @@ async function loadRawBatch(state: AppState, runtime: ColumnRuntime): Promise<vo
     if (visibleCardCount(runtime) === 0) renderColumnMessage(runtime, `Could not load this column: ${message}`, "error");
   } finally {
     runtime.loading = false;
+    setColumnRemoveDisabled(runtime, false);
   }
 }
 
-function shouldScanMoreFilteredSource(runtime: ColumnRuntime): boolean {
-  return runtime.column.kind === "raw" &&
-    !!runtime.column.description?.trim() &&
+function shouldScanMore(runtime: ColumnRuntime): boolean {
+  return !!runtime.column.instruction?.trim() &&
     runtime.hasMore &&
     !columnHasScrollableBacklog(runtime);
 }
@@ -818,163 +929,129 @@ function columnHasScrollableBacklog(runtime: ColumnRuntime): boolean {
 }
 
 function endOfFeedLabel(column: Column): string {
-  switch (column.feed) {
+  switch (column.source) {
     case "new": return "End of HN new stories";
     case "ask": return "End of Ask HN";
     case "show": return "End of Show HN";
     case "user": return "End of user activity";
     case "best-month": return "End of monthly best";
+    case "search": return "End of search results";
+    case "custom": return "End of HN stream";
     case "top":
     default: return "End of HN top stories";
   }
 }
 
 function columnNeedsNanoFilter(column: Column): boolean {
-  const predicate = column.description?.trim();
-  return column.kind === "raw" && !!predicate && literalSourcePredicate(column) === null;
+  return !!column.instruction?.trim();
 }
 
-async function filterSourceStories(state: AppState, runtime: ColumnRuntime, stories: HNFeedItem[]): Promise<HNFeedItem[]> {
-  const predicate = runtime.column.description?.trim();
-  if (!predicate || runtime.column.kind !== "raw" || stories.length === 0) return stories;
-  const literal = literalSourcePredicate(runtime.column);
-  if (literal) return stories.filter((story) => literalSourceMatches(story, literal));
+async function filterStories(state: AppState, runtime: ColumnRuntime, stories: HNFeedItem[]): Promise<HNFeedItem[]> {
+  const instruction = runtime.column.instruction?.trim();
+  if (!instruction || stories.length === 0) return stories;
 
-  const undecided: HNFeedItem[] = [];
-  for (const story of stories) {
-    if (!state.sourceFilterDecisions.has(sourceFilterCacheKey(runtime.column, story.id))) undecided.push(story);
-  }
-
-  if (undecided.length > 0) {
-    let validDecisions = 0;
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const filterColumn: Column = {
-        ...runtime.column,
-        kind: "curated",
-        description: predicate,
-      };
-      const sink: DeckSink = {
-        enqueue(action) {
-          if (!undecided.some((story) => story.id === action.storyId)) return;
-          state.sourceFilterDecisions.set(sourceFilterCacheKey(runtime.column, action.storyId), action.columnId === runtime.column.id);
-          validDecisions++;
-        },
-        onSkip(reason) {
-          console.warn("[deck filter] skipped", reason);
-        },
-      };
-      const router = new DeckRouter([runtime.column.id], undecided.map((story) => story.id), sink);
-      const executor = createDeckExecutor(router);
-      await state.promptBus.run({
-        systemPrompt: buildSourceFilterSystemPrompt({
-          column: filterColumn,
-          stories: undecided,
-          batchStart: runtime.cursor,
-        }),
-        userPrompt: buildSourceFilterUserPrompt(attempt > 0),
-        onChunk: (chunk) => executor.push(chunk),
-      });
-      executor.end();
-      if (validDecisions > 0 || attempt > 0) break;
-    }
-    for (const story of undecided) {
-      const key = sourceFilterCacheKey(runtime.column, story.id);
-      if (!state.sourceFilterDecisions.has(key)) state.sourceFilterDecisions.set(key, false);
+  const onlyStories = stories.filter((s): s is HNStory => s.type === "story");
+  for (const story of onlyStories) {
+    if (!state.sourceFilterDecisions.has(filterCacheKey(runtime.column, story.id))) {
+      await filterSingleStory(state, runtime, story);
     }
   }
 
-  return stories.filter((story) => state.sourceFilterDecisions.get(sourceFilterCacheKey(runtime.column, story.id)) === true);
+  return onlyStories.filter((story) => state.sourceFilterDecisions.get(filterCacheKey(runtime.column, story.id)) === true);
 }
 
-function parseLiteralSourcePredicate(predicate: string): string[] | null {
-  const p = predicate.trim();
-  if (!p) return null;
-  const quoted = p.match(/^['"]([^'"]{1,80})['"]$/);
-  if (quoted) return [quoted[1]!.toLowerCase()];
-  if (/^[a-z0-9][a-z0-9._-]{1,79}$/i.test(p)) return [p.toLowerCase()];
-  if (/^[a-z0-9][a-z0-9._-]*(\s+[a-z0-9][a-z0-9._-]*){1,2}$/i.test(p)) {
-    return p.toLowerCase().split(/\s+/);
+async function filterSingleStory(state: AppState, runtime: ColumnRuntime, story: HNStory): Promise<void> {
+  const key = filterCacheKey(runtime.column, story.id);
+  if (state.sourceFilterDecisions.has(key)) return;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    let output = "";
+    await state.promptBus.run({
+      systemPrompt: buildSourceFilterSystemPrompt({
+        column: runtime.column,
+        story,
+        globalInstruction: state.routingInstructions,
+      }),
+      userPrompt: buildSourceFilterUserPrompt(attempt > 0),
+      onChunk: (chunk) => { output += chunk; },
+    });
+    const decision = parseBooleanFilterOutput(output);
+    if (decision !== null) {
+      state.sourceFilterDecisions.set(key, decision);
+      return;
+    }
   }
+  state.sourceFilterDecisions.set(key, false);
+}
+
+function parseBooleanFilterOutput(output: string): boolean | null {
+  const trimmed = output.trim().toUpperCase();
+  if (trimmed === "YES" || trimmed === "Y" || trimmed === "T" || trimmed === "TRUE") return true;
+  if (trimmed === "NO" || trimmed === "N" || trimmed === "F" || trimmed === "FALSE") return false;
+  if (/^YES\b/.test(trimmed)) return true;
+  if (/^NO\b/.test(trimmed)) return false;
   return null;
 }
 
-function literalSourcePredicate(column: Column): string[] | null {
-  const predicate = column.description?.trim();
-  return predicate ? parseLiteralSourcePredicate(predicate) : null;
+function filterCacheKey(column: Column, storyId: number): string {
+  return `${SOURCE_FILTER_CACHE_VERSION}\n${column.id}\n${column.instruction?.trim() ?? ""}\n${storyId}`;
 }
 
-function literalSourceMatches(story: HNFeedItem, terms: readonly string[]): boolean {
-  const haystack = [
-    story.by,
-    story.type === "comment" ? "news.ycombinator.com" : hostOf(story.url),
-    story.type === "comment" ? stripHtml(story.text) : story.title,
-    story.type === "story" ? stripHtml(story.text ?? "") : "",
-    story.type === "story" ? story.url ?? "" : "",
-  ].join("\n").toLowerCase();
-  return terms.every((term) => haystack.includes(term));
-}
-
-function sourceFilterCacheKey(column: Column, storyId: number): string {
-  return `${column.id}\n${column.description?.trim() ?? ""}\n${storyId}`;
-}
+// ─── Refresh from top ────────────────────────────────────────────────
 
 async function refreshColumnFromTop(state: AppState, dom: DOM, runtime: ColumnRuntime): Promise<void> {
   if (runtime.topRefreshing) return;
   runtime.topRefreshing = true;
+  setColumnRemoveDisabled(runtime, true);
   runtime.topStatus.hidden = false;
   runtime.topStatus.classList.remove("deck-column__top-status--ready");
   runtime.topStatus.classList.add("deck-column__top-status--loading");
   runtime.topStatus.innerHTML = `<span class="deck-spinner" aria-hidden="true"></span> Refreshing…`;
   try {
-    if (runtime.column.kind === "raw") {
-      clearHNCache();
-      const batch = await fetchFeedStoryBatch(
-        runtime.column.feed ?? "top",
-        0,
-        BATCH,
-        undefined,
-        { user: runtime.column.feedUser, month: runtime.column.feedMonth },
-      );
-      if (columnNeedsNanoFilter(runtime.column) && !state.modelReady) {
-        runtime.sentinel.textContent = "Nano filter not ready";
-        if (visibleCardCount(runtime) === 0) renderColumnMessage(runtime, "This source has a prompt filter. Enable Nano to apply it.");
-        return;
-      }
-      const stories = await filterSourceStories(state, runtime, batch.stories);
-      const fragment = document.createDocumentFragment();
-      let added = 0;
-      for (const story of stories) {
-        state.storyById.set(story.id, story);
-        const item = { storyId: story.id, lastRenderedAt: Date.now() };
-        const existing = runtime.body.querySelector<HTMLElement>(`[data-story-id="${story.id}"]`);
-        if (existing) {
-          if (!shouldReplaceColumnItem(state, runtime.column.id, story.id)) continue;
-          upsertColumnItem(state, runtime.column.id, item);
-          existing.replaceWith(renderStoryCard(story, true));
-          added++;
-          continue;
-        }
-        upsertColumnItem(state, runtime.column.id, item, "prepend");
-        fragment.appendChild(renderStoryCard(story, true));
-        added++;
-      }
-      if (added > 0) {
-        clearColumnMessage(runtime);
-        runtime.body.prepend(fragment);
-      }
-      runtime.sentinel.textContent = added > 0 ? `Added ${added} new` : "No new items";
-      runtime.cursor = Math.max(runtime.cursor, BATCH);
-      runtime.hasMore = batch.hasMore;
-    } else {
-      await routeFreshTopBatch(state, dom);
-      runtime.sentinel.textContent = "Refreshed";
+    clearHNCache();
+    const batch = await fetchFeedStoryBatch(
+      columnFeed(runtime.column),
+      0,
+      BATCH,
+      undefined,
+      { user: runtime.column.feedUser, month: runtime.column.feedMonth, query: runtime.column.feedQuery },
+    );
+    if (columnNeedsNanoFilter(runtime.column) && !state.modelReady) {
+      runtime.sentinel.textContent = "Nano not ready";
+      if (visibleCardCount(runtime) === 0) renderColumnMessage(runtime, "This column has a custom instruction. Enable Nano to apply it.");
+      return;
     }
+    const stories = await filterStories(state, runtime, batch.stories);
+    const fragment = document.createDocumentFragment();
+    let added = 0;
+    for (const story of stories) {
+      state.storyById.set(story.id, story);
+      const item = { storyId: story.id, lastRenderedAt: Date.now() };
+      const existing = runtime.body.querySelector<HTMLElement>(`[data-story-id="${story.id}"]`);
+      if (existing) {
+        if (!shouldReplaceColumnItem(state, runtime.column.id, story.id)) continue;
+        upsertColumnItem(state, runtime.column.id, item);
+        existing.replaceWith(renderStoryCard(story, true));
+        added++;
+        continue;
+      }
+      upsertColumnItem(state, runtime.column.id, item, "prepend");
+      fragment.appendChild(renderStoryCard(story, true));
+      added++;
+    }
+    if (added > 0) {
+      clearColumnMessage(runtime);
+      runtime.body.prepend(fragment);
+    }
+    runtime.sentinel.textContent = added > 0 ? `Added ${added} new` : "No new items";
+    runtime.cursor = Math.max(runtime.cursor, BATCH);
+    runtime.hasMore = batch.hasMore;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     runtime.sentinel.textContent = "Refresh failed";
     if (visibleCardCount(runtime) === 0) renderColumnMessage(runtime, `Could not refresh this column: ${message}`, "error");
   } finally {
     runtime.topRefreshing = false;
+    setColumnRemoveDisabled(runtime, false);
     runtime.topStatus.classList.remove("deck-column__top-status--loading");
     runtime.topPull = 0;
     window.setTimeout(() => {
@@ -990,147 +1067,7 @@ function hideTopStatus(runtime: ColumnRuntime): void {
   runtime.topStatus.textContent = "Release to refresh";
 }
 
-async function routeNextBatch(state: AppState, dom: DOM): Promise<boolean> {
-  if (!state.modelReady) {
-    setStatus(dom, "Nano is not ready yet. Enable/download Nano first; raw Front page still works.", "warn");
-    for (const rt of state.columns.values()) {
-      if (rt.column.kind === "curated" && rt.body.querySelector(".deck-empty")) {
-        rt.sentinel.textContent = "Nano not ready";
-      }
-    }
-    return false;
-  }
-  if (state.routing) return false;
-  state.routing = true;
-  try {
-    return await routeOneBatch(state, dom);
-  } finally {
-    state.routing = false;
-  }
-}
-
-async function routeUntilFilled(state: AppState, dom: DOM): Promise<void> {
-  if (!state.modelReady) {
-    await routeNextBatch(state, dom);
-    return;
-  }
-  if (state.routing) return;
-  state.routing = true;
-  try {
-    markUnderfilledColumnsBusy(state);
-    while (underfilledCuratedColumns(state).length > 0) {
-      const missing = underfilledCuratedColumns(state).map((rt) => rt.column.title).join(", ");
-      setStatus(dom, `Nano is still routing. Underfilled: ${missing}`);
-      const hasMore = await routeOneBatch(state, dom);
-      if (!hasMore) break;
-    }
-    const missing = underfilledCuratedColumns(state);
-    if (missing.length === 0) {
-      setStatus(dom, "Curated columns have a backlog. Scroll for rolling updates.");
-      for (const rt of state.columns.values()) {
-        if (rt.column.kind === "curated") rt.sentinel.textContent = "Scroll for rolling updates";
-      }
-    } else {
-      setStatus(dom, `HN exhausted; still underfilled: ${missing.map((rt) => rt.column.title).join(", ")}`, "warn");
-      for (const rt of missing) rt.sentinel.textContent = "HN exhausted";
-    }
-  } finally {
-    state.routing = false;
-  }
-}
-
-async function routeOneBatch(
-  state: AppState,
-  dom: DOM,
-  opts: { clearFirstBatch?: boolean; silent?: boolean; fresh?: boolean } = {},
-): Promise<boolean> {
-  const clearFirstBatch = opts.clearFirstBatch ?? true;
-  const silent = opts.silent ?? false;
-  const fresh = opts.fresh ?? false;
-  const curated = state.deck.columns.filter((c) => c.kind === "curated");
-  if (curated.length === 0) return false;
-  setRoutingVisuals(state, true);
-  state.markingFresh = fresh;
-  if (!silent) {
-    setStatus(dom, `Routing stories ${state.routingCursor + 1}–${state.routingCursor + BATCH} through Nano…`);
-  }
-
-  const batch = await fetchTopStoryBatch(state.routingCursor, state.routingCursor + BATCH);
-  for (const s of batch.stories) state.storyById.set(s.id, s);
-  if (state.routingCursor === 0 && clearFirstBatch) {
-    for (const col of curated) {
-      const rt = state.columns.get(col.id);
-      if (rt) rt.body.innerHTML = "";
-    }
-  }
-
-  const routingInstructions = dom.instructionsBox.value.trim();
-
-  let decisions = 0;
-  let placements = 0;
-  try {
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const sink: DeckSink = {
-        enqueue(action) {
-          if (action.columnId === "") {
-            if (state.storyById.has(action.storyId)) decisions++;
-            return;
-          }
-          if (renderDeckAction(state, action)) {
-            decisions++;
-            placements++;
-          }
-        },
-        onSkip(reason) {
-          console.warn("[deck] skipped", reason);
-        },
-      };
-      const router = new DeckRouter(curated.map((c) => c.id), batch.stories.map((s) => s.id), sink);
-      const executor = createDeckExecutor(router);
-      await state.promptBus.run({
-        systemPrompt: buildDeckSystemPrompt({ routingInstructions, columns: state.deck.columns, stories: batch.stories, batchStart: state.routingCursor }),
-        userPrompt: buildDeckUserPrompt(attempt > 0),
-        onChunk: (chunk) => executor.push(chunk),
-      });
-      executor.end();
-      if (decisions > 0 || attempt > 0) break;
-      if (!silent) setStatus(dom, "Nano returned no valid decisions. Retrying once…");
-    }
-    state.routingCursor += BATCH;
-    if (placements === 0) {
-      for (const rt of state.columns.values()) {
-        if (rt.column.kind === "curated") rt.sentinel.textContent = batch.hasMore ? "No matches in latest batch; scroll for older" : "HN exhausted";
-      }
-    }
-    return batch.hasMore;
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    setStatus(dom, `Routing failed: ${message}`, "error");
-    for (const rt of state.columns.values()) {
-      if (rt.column.kind !== "curated") continue;
-      rt.sentinel.textContent = "Routing failed";
-      if (visibleCardCount(rt) === 0) renderColumnMessage(rt, `Could not route this column: ${message}`, "error");
-    }
-    return false;
-  } finally {
-    state.markingFresh = false;
-    setRoutingVisuals(state, false);
-  }
-}
-
-async function routeFreshTopBatch(state: AppState, dom: DOM): Promise<void> {
-  if (!state.modelReady || state.routing) return;
-  state.routing = true;
-  const previousCursor = state.routingCursor;
-  try {
-    clearHNCache();
-    state.routingCursor = 0;
-    await routeOneBatch(state, dom, { clearFirstBatch: false, silent: true, fresh: true });
-  } finally {
-    state.routingCursor = previousCursor;
-    state.routing = false;
-  }
-}
+// ─── Auto-reload ─────────────────────────────────────────────────────
 
 function scheduleColumnAutoReload(state: AppState, dom: DOM, runtime: ColumnRuntime): void {
   clearColumnAutoReloadTimer(runtime);
@@ -1201,6 +1138,8 @@ function formatReloadInterval(ms: number): string {
   return `${Math.round(ms / 1000)}s`;
 }
 
+// ─── UI size ─────────────────────────────────────────────────────────
+
 function toggleUISize(state: AppState, dom: DOM): void {
   const current = UI_SIZES.indexOf(state.uiSize);
   state.uiSize = UI_SIZES[(current + 1) % UI_SIZES.length] ?? "normal";
@@ -1230,44 +1169,14 @@ function coerceUISize(value: unknown): UISize {
   return typeof value === "string" && UI_SIZES.includes(value as UISize) ? value as UISize : "normal";
 }
 
-function underfilledCuratedColumns(state: AppState): ColumnRuntime[] {
-  return Array.from(state.columns.values()).filter((rt) =>
-    rt.column.kind === "curated" && !columnHasScrollableBacklog(rt),
-  );
+// ─── Column remove helper ────────────────────────────────────────────
+
+function setColumnRemoveDisabled(runtime: ColumnRuntime, disabled: boolean): void {
+  const btn = runtime.el.querySelector<HTMLButtonElement>('[data-action="remove"]');
+  if (btn) btn.disabled = disabled;
 }
 
-function markUnderfilledColumnsBusy(state: AppState): void {
-  for (const rt of underfilledCuratedColumns(state)) {
-    rt.sentinel.textContent = "Nano routing…";
-  }
-}
-
-function setRoutingVisuals(state: AppState, active: boolean): void {
-  for (const rt of state.columns.values()) {
-    if (rt.column.kind !== "curated") continue;
-    rt.el.classList.toggle("deck-column--routing", active);
-    if (active) {
-      rt.sentinel.innerHTML = `<span class="deck-spinner" aria-hidden="true"></span> Nano routing…`;
-    } else if (rt.sentinel.textContent?.includes("routing")) {
-      rt.sentinel.textContent = "Scroll for rolling updates";
-    }
-  }
-}
-
-function renderDeckAction(state: AppState, action: DeckAction): boolean {
-  const rt = state.columns.get(action.columnId);
-  if (!rt) return false;
-  const story = state.storyById.get(action.storyId);
-  if (!story) return false;
-  if (!shouldReplaceColumnItem(state, rt.column.id, action.storyId)) return false;
-  upsertColumnItem(state, rt.column.id, { storyId: story.id, lastRenderedAt: Date.now() }, state.markingFresh ? "prepend" : "append");
-  const card = renderStoryCard(story, state.markingFresh);
-  const existing = rt.body.querySelector<HTMLElement>(`[data-story-id="${story.id}"]`);
-  if (existing) existing.replaceWith(card);
-  else if (state.markingFresh) rt.body.prepend(card);
-  else rt.body.appendChild(card);
-  return true;
-}
+// ─── Column item bookkeeping ─────────────────────────────────────────
 
 function renderColumnCache(state: AppState, runtime: ColumnRuntime): void {
   const items = getColumnItems(state, runtime.column.id);
@@ -1312,6 +1221,8 @@ function shouldReplaceColumnItem(state: AppState, columnId: string, storyId: num
   return Date.now() - existing.lastRenderedAt > CARD_STALE_MS;
 }
 
+// ─── OPFS persistence ────────────────────────────────────────────────
+
 async function loadPersistedState(): Promise<PersistedState | null> {
   try {
     const root = await getOPFSRoot();
@@ -1328,6 +1239,7 @@ async function loadPersistedState(): Promise<PersistedState | null> {
         : typeof raw.readerContext === "string"
           ? raw.readerContext
           : "",
+      setupDismissed: typeof raw.setupDismissed === "boolean" ? raw.setupDismissed : false,
       uiSize: coerceUISize(raw.uiSize),
       mastheadTitle: typeof raw.mastheadTitle === "string" ? raw.mastheadTitle : readMastheadTitle(),
       mastheadSubtitle: typeof raw.mastheadSubtitle === "string" ? raw.mastheadSubtitle : readMastheadSubtitle(),
@@ -1355,6 +1267,7 @@ async function persistStateNow(state: AppState): Promise<void> {
   const snapshot = {
     deck: state.deck,
     routingInstructions: state.routingInstructions,
+    setupDismissed: state.setupDismissed,
     uiSize: state.uiSize,
     mastheadTitle: state.mastheadTitle,
     mastheadSubtitle: state.mastheadSubtitle,
@@ -1416,7 +1329,11 @@ function readPersistableDOMSnapshot(): DOMSnapshot {
   const snapshot = readDOMSnapshot();
   const template = document.createElement("template");
   template.innerHTML = snapshot.bodyHTML;
-  for (const dialog of template.content.querySelectorAll("dialog[open]")) dialog.removeAttribute("open");
+  for (const dialog of template.content.querySelectorAll("dialog")) {
+    dialog.removeAttribute("open");
+    dialog.removeAttribute("data-dialog-open");
+    dialog.removeAttribute("aria-modal");
+  }
   template.content.getElementById(DROP_PLACEHOLDER_ID)?.remove();
   for (const el of template.content.querySelectorAll(".deck-column--dragging")) el.classList.remove("deck-column--dragging");
   return { ...snapshot, bodyHTML: template.innerHTML };
@@ -1442,6 +1359,12 @@ async function getOPFSRoot(): Promise<FileSystemDirectoryHandle | null> {
   };
   return storage.getDirectory ? storage.getDirectory() : null;
 }
+
+async function isPersistenceAvailable(): Promise<boolean> {
+  return (await getOPFSRoot()) !== null;
+}
+
+// ─── Story cards ─────────────────────────────────────────────────────
 
 function renderStoryCard(story: HNFeedItem, fresh = false): HTMLElement {
   const el = document.createElement("article");
@@ -1515,6 +1438,8 @@ function renderStoryMeta(story: Extract<HNFeedItem, { type: "story" }>, host: st
   `;
 }
 
+// ─── Comments preview ────────────────────────────────────────────────
+
 async function openCommentsPreview(storyId: number): Promise<void> {
   if (!Number.isFinite(storyId)) return;
   const dom = tryGetDOM();
@@ -1528,9 +1453,7 @@ async function openCommentsPreview(storyId: number): Promise<void> {
     <a class="comments-preview__open" href="${escapeAttr(hnPermalink(storyId))}" target="_blank" rel="noopener noreferrer">Open full thread on HN ↗</a>
     <p class="deck-empty"><span class="deck-spinner" aria-hidden="true"></span> Loading comments…</p>
   `;
-  if (dom.commentsDialog.open) dom.commentsDialog.close();
-  if (typeof dom.commentsDialog.showModal === "function") dom.commentsDialog.showModal();
-  else dom.commentsDialog.setAttribute("open", "");
+  openDialog(dom.commentsDialog);
   try {
     const preview = await fetchCommentPreview(storyId, abort.signal);
     dom.commentsTitle.textContent = preview.story.title;
@@ -1583,6 +1506,8 @@ function renderCommentMeta(comment: Extract<HNFeedItem, { type: "comment" }>, by
   `;
 }
 
+// ─── Column dialog ───────────────────────────────────────────────────
+
 function editColumn(state: AppState, dom: DOM, id: string): void {
   openColumnDialog(state, dom, id);
 }
@@ -1593,8 +1518,114 @@ function moveColumnInDeck(state: AppState, dom: DOM, id: string, direction: -1 |
   renderDeck(state, dom);
 }
 
+async function removeColumnFromDeck(state: AppState, dom: DOM, id: string): Promise<void> {
+  const runtime = state.columns.get(id);
+  if (runtime && (runtime.loading || runtime.backfilling || runtime.topRefreshing)) return;
+  if (state.persistTimer !== null) {
+    window.clearTimeout(state.persistTimer);
+    state.persistTimer = null;
+  }
+  state.columnItems.delete(id);
+  clearFilterDecisions(state, id);
+  state.deck = removeColumn(state.deck, id);
+  if (state.focusedColumnId === id) state.focusedColumnId = null;
+  await persistStateNow(state);
+  renderDeck(state, dom);
+  await persistDOMSnapshotNow();
+}
+
+function openColumnDialog(state: AppState, dom: DOM, id: string | null): void {
+  state.editingColumnId = id;
+  const col = id ? state.deck.columns.find((c) => c.id === id) : null;
+  dom.columnTitle.value = columnDialogTitle(col);
+  dom.columnSource.value = col?.source ?? "custom";
+  dom.columnInstruction.value = col?.instruction ?? (col ? "" : defaultColumnInstruction("custom"));
+  syncColumnSourceState(dom, false);
+  openDialog(dom.columnDialog);
+}
+
+function columnDialogTitle(col: Column | null | undefined): string {
+  if (!col) return "AI News";
+  if (col.source === "user") return col.feedUser || col.title;
+  if (col.source === "search") return col.feedQuery || col.title;
+  return col.title;
+}
+
+function closeColumnDialog(state: AppState, dom: DOM): void {
+  state.editingColumnId = null;
+  closeDialog(dom.columnDialog);
+}
+
+function saveColumnDialog(state: AppState, dom: DOM): void {
+  const title = dom.columnTitle.value.trim();
+  if (!title) return;
+  const source = dom.columnSource.value as ColumnSource;
+  const editingId = state.editingColumnId;
+  const instruction = dom.columnInstruction.value.trim() || undefined;
+  const next: Omit<Column, "id"> =
+    source === "top" || source === "new" || source === "ask" || source === "show"
+      ? { source, title, instruction }
+      : source === "user"
+        ? { source, title, feedUser: title, instruction }
+      : source === "best-month"
+        ? { source, title, feedMonth: /^\d{4}-\d{2}$/.test(title) ? title : new Date().toISOString().slice(0, 7), instruction }
+      : source === "search"
+        ? { source, title, feedQuery: title, instruction }
+      : {
+          source: "custom",
+          title,
+          instruction: instruction || defaultColumnInstruction("custom"),
+        };
+  if (editingId) {
+    state.deck = updateColumn(state.deck, editingId, next);
+    state.columnItems.delete(editingId);
+    clearFilterDecisions(state, editingId);
+  } else {
+    state.deck = addColumn(state.deck, { ...next, id: newColumnId() });
+  }
+  queuePersistState(state);
+  closeColumnDialog(state, dom);
+  renderDeck(state, dom);
+}
+
+function clearFilterDecisions(state: AppState, columnId: string): void {
+  for (const key of state.sourceFilterDecisions.keys()) {
+    if (key.includes(`\n${columnId}\n`)) state.sourceFilterDecisions.delete(key);
+  }
+}
+
+function syncColumnSourceState(dom: DOM, updateTitle: boolean): void {
+  if (updateTitle) dom.columnTitle.value = defaultColumnTitle(dom.columnSource.value);
+  if (updateTitle) dom.columnInstruction.value = "";
+}
+
+function defaultColumnTitle(source: string): string {
+  switch (source) {
+    case "new": return "New";
+    case "ask": return "Ask";
+    case "show": return "Show";
+    case "user": return "hacker";
+    case "best-month": return "Best this month";
+    case "search": return "cloudflare";
+    case "custom": return "AI News";
+    case "top":
+    default: return "Top";
+  }
+}
+
+function defaultColumnInstruction(source: string): string {
+  if (source !== "custom") return "";
+  return "Artificial intelligence, machine learning, LLMs, GPT, Claude, Gemini, neural networks, AI research, AI products, AI startups.";
+}
+
+// ─── Drag / drop ─────────────────────────────────────────────────────
+
 function bindColumnDragEvents(state: AppState, runtime: ColumnRuntime): void {
   runtime.el.addEventListener("dragstart", (ev) => {
+    if (state.focusedColumnId !== null) {
+      ev.preventDefault();
+      return;
+    }
     if (!isColumnDragHandle(ev.target, runtime.el)) {
       ev.preventDefault();
       return;
@@ -1684,111 +1715,7 @@ function reorderColumn(deck: Deck, sourceId: string, targetId: string, position:
   return { columns };
 }
 
-function openColumnDialog(state: AppState, dom: DOM, id: string | null): void {
-  state.editingColumnId = id;
-  const col = id ? state.deck.columns.find((c) => c.id === id) : null;
-  dom.columnTitle.value = col?.title ?? "Engineer bait";
-  dom.columnKind.value = col?.kind === "raw" ? (col.feed ?? "top") : "custom";
-  dom.columnSourceParam.value = col?.feed === "user"
-    ? col.feedUser ?? ""
-    : col?.feed === "best-month"
-      ? col.feedMonth ?? new Date().toISOString().slice(0, 7)
-      : "";
-  dom.columnPredicate.value = col?.description ?? (col ? "" : defaultColumnPrompt("custom"));
-  syncColumnKindState(dom, false);
-  if (typeof dom.columnDialog.showModal === "function") dom.columnDialog.showModal();
-  else dom.columnDialog.setAttribute("open", "");
-}
-
-function closeColumnDialog(state: AppState, dom: DOM): void {
-  state.editingColumnId = null;
-  dom.columnDialog.close();
-}
-
-function saveColumnDialog(state: AppState, dom: DOM): void {
-  const title = dom.columnTitle.value.trim();
-  if (!title) return;
-  const kind = dom.columnKind.value;
-  const editingId = state.editingColumnId;
-  const previous = editingId ? state.deck.columns.find((c) => c.id === editingId) : null;
-  const sourceParam = dom.columnSourceParam.value.trim();
-  const description = dom.columnPredicate.value.trim() || undefined;
-  const next: Omit<Column, "id"> =
-    kind === "top" || kind === "new" || kind === "ask" || kind === "show"
-      ? { kind: "raw", title, feed: kind, feedUser: undefined, feedMonth: undefined, description }
-      : kind === "user"
-        ? { kind: "raw", title, feed: "user", feedUser: sourceParam || "hacker", feedMonth: undefined, description }
-      : kind === "best-month"
-        ? { kind: "raw", title, feed: "best-month", feedMonth: sourceParam || new Date().toISOString().slice(0, 7), feedUser: undefined, description }
-      : {
-          kind: "curated",
-          title,
-          description: description || defaultColumnPrompt("custom"),
-          feed: undefined,
-          feedUser: undefined,
-          feedMonth: undefined,
-        };
-  if (editingId) {
-    state.deck = updateColumn(state.deck, editingId, next);
-  } else {
-    state.deck = addColumn(state.deck, { ...next, id: newColumnId() });
-  }
-  if (editingId) {
-    state.columnItems.delete(editingId);
-    clearSourceFilterDecisions(state, editingId);
-  }
-  if (previous?.kind === "curated" || next.kind === "curated") resetCuratedRoutingCache(state);
-  queuePersistState(state);
-  closeColumnDialog(state, dom);
-  renderDeck(state, dom);
-  if (next.kind === "curated" && state.modelReady) {
-    void routeUntilFilled(state, dom);
-  }
-}
-
-function resetCuratedRoutingCache(state: AppState): void {
-  state.routingCursor = 0;
-  for (const column of state.deck.columns) {
-    if (column.kind === "curated") state.columnItems.delete(column.id);
-  }
-}
-
-function clearSourceFilterDecisions(state: AppState, columnId: string): void {
-  for (const key of state.sourceFilterDecisions.keys()) {
-    if (key.startsWith(`${columnId}\n`)) state.sourceFilterDecisions.delete(key);
-  }
-}
-
-function syncColumnKindState(dom: DOM, updateTitle: boolean): void {
-  const needsParam = dom.columnKind.value === "user" || dom.columnKind.value === "best-month";
-  dom.columnSourceParam.disabled = !needsParam;
-  if (updateTitle) dom.columnTitle.value = defaultColumnTitle(dom.columnKind.value);
-  if (updateTitle) dom.columnPredicate.value = "";
-  if (dom.columnKind.value === "user" && (updateTitle || !dom.columnSourceParam.value.trim())) {
-    dom.columnSourceParam.value = "hacker";
-  }
-  if (dom.columnKind.value === "best-month" && !dom.columnSourceParam.value.trim()) {
-    dom.columnSourceParam.value = new Date().toISOString().slice(0, 7);
-  }
-}
-
-function defaultColumnTitle(kind: string): string {
-  switch (kind) {
-    case "new": return "New";
-    case "ask": return "Ask";
-    case "show": return "Show";
-    case "user": return "hacker";
-    case "best-month": return "Best this month";
-    case "custom": return "Engineer bait";
-    case "top":
-    default: return "Top";
-  }
-}
-
-function defaultColumnPrompt(kind: string): string {
-  if (kind !== "custom") return "";
-  return "Deep technical posts a working software engineer would stop scrolling for: debugging stories, infrastructure details, databases, compilers, browsers, performance, reliability, and practical tools. Skip generic AI takes, funding, hiring, politics, and drama.";
-}
+// ─── Focus mode ──────────────────────────────────────────────────────
 
 function visibleCardCount(rt: ColumnRuntime): number {
   return rt.body.querySelectorAll(".deck-card").length;
@@ -1809,22 +1736,16 @@ function ensureFocusedColumnBacklog(state: AppState, dom: DOM): void {
   window.requestAnimationFrame(() => void backfillFocusedColumn(state, dom, runtime));
 }
 
-async function backfillFocusedColumn(state: AppState, dom: DOM, runtime: ColumnRuntime): Promise<void> {
+async function backfillFocusedColumn(state: AppState, _dom: DOM, runtime: ColumnRuntime): Promise<void> {
   if (runtime.backfilling) return;
   runtime.backfilling = true;
   try {
     for (let i = 0; i < 4; i++) {
       if (state.focusedColumnId !== runtime.column.id || columnHasScrollableBacklog(runtime)) break;
       runtime.sentinel.innerHTML = `<span class="deck-spinner" aria-hidden="true"></span> Loading older…`;
-      if (runtime.column.kind === "raw") {
-        if (!runtime.hasMore || runtime.loading) break;
-        await loadRawBatch(state, runtime);
-        if (!runtime.hasMore) break;
-      } else {
-        if (state.routing) break;
-        const hasMore = await routeNextBatch(state, dom);
-        if (!hasMore) break;
-      }
+      if (!runtime.hasMore || runtime.loading) break;
+      await loadBatch(state, runtime);
+      if (!runtime.hasMore) break;
       await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
     }
   } finally {
@@ -1841,13 +1762,16 @@ function applyFocusState(state: AppState, dom: DOM): void {
     rt.el.classList.toggle("deck-column--dimmed", hidden);
     const btn = rt.el.querySelector<HTMLButtonElement>('[data-action="focus"]');
     if (btn) {
-      btn.textContent = focused ? "↩" : "⛶";
+      btn.textContent = focused ? "← Back" : "⛶";
+      btn.classList.toggle("deck-column__btn--back", focused);
       btn.title = focused ? "Back to deck" : "Focus column";
       btn.setAttribute("aria-label", btn.title);
     }
   }
   updateDeckOverflowState(dom);
 }
+
+// ─── Custom CSS / theme ──────────────────────────────────────────────
 
 function applyCustomCSS(css: string): void {
   let el = document.getElementById(CUSTOM_CSS_ID) as HTMLStyleElement | null;
@@ -1898,6 +1822,8 @@ function observeCSSVarEdits(state: AppState): void {
   }, 600);
 }
 
+// ─── Masthead ────────────────────────────────────────────────────────
+
 function readMastheadTitle(): string {
   return document.querySelector(".topbar__title")?.textContent?.trim() || document.title;
 }
@@ -1916,6 +1842,8 @@ function applyMasthead(state: AppState): void {
   else if (subtitle) subtitle.textContent = state.mastheadSubtitle;
   document.title = state.mastheadTitle;
 }
+
+// ─── Mutation observers ──────────────────────────────────────────────
 
 function observeMastheadEdits(state: AppState): void {
   state.mastheadObserver?.disconnect();
@@ -2039,6 +1967,8 @@ function isStringRecord(x: unknown): x is Record<string, string> {
   return Object.values(x as Record<string, unknown>).every((value) => typeof value === "string");
 }
 
+// ─── Reset / console ─────────────────────────────────────────────────
+
 async function resetPersistedState(): Promise<void> {
   await deletePersistedState();
   window.location.reload();
@@ -2051,8 +1981,8 @@ function printDevToolsInstructions(): void {
       "────────────────────────────",
       "DOM and CSS edits auto-persist to OPFS as a page snapshot.",
       "On reload, HNDeck restores that snapshot first, then reapplies app-owned state:",
-      "  • deck columns, column order, titles, and prompts",
-      "  • reader context and today's directive",
+      "  • deck columns, column order, titles, and instructions",
+      "  • routing instructions",
       "  • live story/card regions and event wiring",
       "Use the column arrow buttons to reorder columns in app state.",
       "",
@@ -2078,6 +2008,7 @@ function exposeOperationalConsoleAPI(state: AppState): void {
     state: () => ({
       deck: structuredClone(state.deck),
       routingInstructions: state.routingInstructions,
+      setupDismissed: state.setupDismissed,
       uiSize: state.uiSize,
       mastheadTitle: state.mastheadTitle,
       mastheadSubtitle: state.mastheadSubtitle,
@@ -2088,6 +2019,8 @@ function exposeOperationalConsoleAPI(state: AppState): void {
     }),
   };
 }
+
+// ─── Formatting helpers ──────────────────────────────────────────────
 
 function formatScore(score: number): string {
   if (score >= 1000) return `${Math.round(score / 100) / 10}k`;

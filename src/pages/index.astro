@@ -25,7 +25,7 @@
       </div>
     </div>
 
-    <header class="topbar" data-app-version="2">
+    <header class="topbar" data-app-version="3">
       <div class="topbar__brand">
         <img class="topbar__logo" src="/favicon.svg?v=32" alt="HNDeck" />
         <div>
@@ -38,6 +38,11 @@
         </div>
       </div>
       <div class="topbar__actions">
+        <button id="search-btn" class="topbar__btn topbar__btn--icon" type="button" aria-label="Search HN" title="Search HN">
+          <svg class="topbar__icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M10.5 4a6.5 6.5 0 0 1 5.16 10.45l4.45 4.44-1.42 1.42-4.44-4.45A6.5 6.5 0 1 1 10.5 4Zm0 2a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9Z" fill="currentColor" />
+          </svg>
+        </button>
         <button id="add-column-btn" class="topbar__btn" type="button">
           <span aria-hidden="true">＋</span>
           <span>Column</span>
@@ -52,11 +57,17 @@
         </button>
         <a
           id="github-link"
-          class="topbar__btn topbar__btn--small"
+          class="topbar__btn topbar__btn--icon"
           href="https://github.com/teamchong/hndeck"
           target="_blank"
           rel="noopener noreferrer"
-        >GitHub ↗</a>
+          aria-label="GitHub"
+          title="GitHub"
+        >
+          <svg class="topbar__icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 .5A11.5 11.5 0 0 0 8.36 22.9c.58.1.79-.25.79-.56v-2.15c-3.22.7-3.9-1.38-3.9-1.38-.53-1.35-1.3-1.71-1.3-1.71-1.06-.73.08-.72.08-.72 1.17.08 1.79 1.2 1.79 1.2 1.04 1.78 2.73 1.27 3.4.97.1-.75.4-1.27.73-1.56-2.57-.29-5.28-1.29-5.28-5.73 0-1.27.45-2.3 1.2-3.12-.12-.29-.52-1.48.11-3.08 0 0 .98-.31 3.2 1.19a11.1 11.1 0 0 1 5.82 0c2.22-1.5 3.2-1.19 3.2-1.19.63 1.6.23 2.79.11 3.08.75.82 1.2 1.85 1.2 3.12 0 4.46-2.71 5.43-5.29 5.72.42.36.79 1.08.79 2.18v3.23c0 .31.2.67.8.56A11.5 11.5 0 0 0 12 .5Z" fill="currentColor" />
+          </svg>
+        </a>
       </div>
     </header>
 
@@ -70,7 +81,7 @@
            (progress bar), or the browser/device doesn't support it
            (setup-guide steps). When Nano is already on disk this
            stays hidden and the reader goes straight to composing. -->
-      <section id="setup-banner" class="setup-banner" hidden>
+      <section id="setup-banner" class="setup-banner" data-app-version="2" hidden>
         <div class="setup-banner__icon" aria-hidden="true">⚙️</div>
         <div class="setup-banner__main">
           <h3 id="setup-title" class="setup-banner__title"></h3>
@@ -90,6 +101,9 @@
             </button>
             <button id="setup-retry" class="setup-banner__btn" type="button" hidden>
               Try again
+            </button>
+            <button id="setup-dismiss" class="setup-banner__btn" type="button" hidden>
+              Dismiss
             </button>
           </div>
         </div>
@@ -121,28 +135,26 @@
         </header>
 
         <p class="about-dialog__caption">
-          This is a personal learning project for Chrome's Prompt API. Like
-          many people, I noticed Chrome had downloaded the Gemini Nano model
-          and it was taking a few GB of disk space. Since it was already sitting
-          there, I wanted to see if I could build something useful with it.
+          Hacker News already decides what I see through upvotes and ranking.
+          I wanted to add my own filter — an AI that works for me, not an
+          algorithm that works for everyone.
         </p>
 
         <div class="about-dialog__body">
           <p>
-            I tried a few ideas. This is the one I ended up liking: local AI
-            that reads Hacker News through my own preferences and turns it
-            into columns I actually want to scan.
+            Write a short instruction like "AI News" or "no AI" and Nano
+            filters each story locally on your device. No server, no account,
+            no tracking. Your instructions never leave your browser.
           </p>
           <p>
-            The column prompts stay local. Nano routes stories in the browser.
-            It is not trying to write the whole app or replace HN. It just
-            helps decide what belongs where.
+            This is also a personal learning project for Chrome's Prompt API.
+            Chrome may already have Gemini Nano on disk — this project turns
+            that into something useful.
           </p>
           <p>
-            I also wanted the page itself to be easy to make your own. Open
-            DevTools, edit the HTML, CSS, or DOM however you like, and HNDeck
-            will persist the page snapshot. On reload it restores your changes
-            and then reapplies the app-owned deck state.
+            The page is intentionally editable. Open DevTools, change the HTML
+            or CSS however you like, and HNDeck persists the snapshot. On
+            reload it restores your changes and reapplies the live deck state.
           </p>
         </div>
       </article>
@@ -203,7 +215,7 @@
     </dialog>
 
     <!-- ─── Per-column settings dialog ─────────────────────────────── -->
-    <dialog id="column-dialog" class="about-dialog" data-app-version="4">
+    <dialog id="column-dialog" class="about-dialog" data-app-version="5">
       <article class="about-dialog__panel">
         <header class="about-dialog__header">
           <h2 class="about-dialog__hed">Column settings</h2>
@@ -216,23 +228,24 @@
         </header>
 
         <p class="about-dialog__caption">
-          Every column has a title and a predicate. Built-in predicates
-          mirror Hacker News views. Custom predicates are prompts Nano
-          uses to decide which stories belong in that column.
+          Pick a source and optionally add a custom instruction.
+          Nano filters each story one at a time using your instruction.
+          For User and Search, the title is the username / query.
         </p>
 
         <div class="editor-form">
-          <label class="editor-form__label" for="column-kind">
-            <span>Predicate / source</span>
+          <label class="editor-form__label" for="column-source">
+            <span>Source</span>
           </label>
-          <select id="column-kind" class="editor-form__input">
+          <select id="column-source" class="editor-form__input">
             <option value="top">Top</option>
             <option value="new">New</option>
             <option value="ask">Ask</option>
             <option value="show">Show</option>
             <option value="user">User submissions</option>
             <option value="best-month">Best stories this month</option>
-            <option value="custom">Custom Nano prompt</option>
+            <option value="search">Search HN</option>
+            <option value="custom">Custom (all HN, Nano filtered)</option>
           </select>
 
           <label class="editor-form__label" for="column-title">
@@ -245,30 +258,17 @@
             placeholder="e.g. Tools, AI, Funny"
           />
 
-          <label class="editor-form__label" for="column-source-param">
-            <span>Source parameter</span>
+          <label class="editor-form__label" for="column-instruction">
+            <span>Custom instruction</span>
             <span class="editor-form__hint">
-              User submissions: HN username. Best month: YYYY-MM. Leave blank for other sources.
-            </span>
-          </label>
-          <input
-            id="column-source-param"
-            class="editor-form__input"
-            type="text"
-            placeholder="hacker or 2026-05"
-          />
-
-          <label class="editor-form__label" for="column-predicate">
-            <span>Prompt / predicate</span>
-            <span class="editor-form__hint">
-              Optional Nano prompt. For source columns, Nano filters the source before rendering. Blank means show the source as-is.
+              Nano filters each story against this instruction. Leave blank for no filter.
             </span>
           </label>
           <textarea
-            id="column-predicate"
+            id="column-instruction"
             class="editor-form__textarea"
             rows="5"
-            placeholder="e.g. only practical engineering tools, skip drama, database internals, genuinely funny"
+            placeholder="e.g. AI News"
           ></textarea>
         </div>
 
@@ -293,6 +293,22 @@
         <div id="comments-body" class="comments-dialog__body">
           <p class="deck-empty">Select a story to preview comments.</p>
         </div>
+      </article>
+    </dialog>
+
+    <dialog id="search-dialog" class="search-dialog" data-app-version="1">
+      <article class="search-dialog__panel">
+        <header class="search-dialog__header">
+          <div>
+            <p id="search-meta" class="comments-dialog__meta">HN search</p>
+            <h2 class="comments-dialog__title">Search Hacker News</h2>
+          </div>
+          <button id="search-close" class="about-dialog__close" type="button" aria-label="Close">×</button>
+        </header>
+        <form id="search-form" class="search-dialog__form">
+          <input id="search-input" class="search-dialog__input" type="search" placeholder="cloudflare, sqlite, rust, browser…" autocomplete="off" />
+          <button class="editor-form__btn editor-form__btn--primary" type="submit">Add column</button>
+        </form>
       </article>
     </dialog>
 
@@ -488,10 +504,16 @@
         background: #fff0d6; color: var(--orange);
         border-color: var(--orange);
       }
-      .topbar__btn--small {
-        padding: 6px 12px;
-        font-size: 12px;
-        text-decoration: none;
+      .topbar__btn--icon {
+        width: 34px;
+        height: 34px;
+        justify-content: center;
+        padding: 0;
+      }
+      .topbar__icon {
+        width: 17px;
+        height: 17px;
+        display: block;
       }
       .topbar__btn--primary {
         background: var(--fg); color: var(--bg-2);
@@ -560,17 +582,42 @@
       }
 
       /* ─── About dialog ──────────────────────────────────────── */
-      .about-dialog {
-        border: none; padding: 0; background: transparent;
-        max-width: 720px; width: 92%; max-height: 90vh;
+      dialog.about-dialog,
+      dialog.comments-dialog,
+      dialog.search-dialog {
+        display: grid;
+        position: fixed;
+        inset: 0;
+        place-items: center;
+        margin: 0;
+        opacity: 0;
+        visibility: hidden;
+        pointer-events: none;
+        border: 0;
+        padding: 0;
+        max-width: none;
+        max-height: none;
+        width: 100vw;
+        height: 100vh;
         color: var(--fg);
+        background: rgba(0, 0, 0, 0.36);
+        z-index: 2000;
       }
-      .about-dialog::backdrop {
-        background: rgba(0, 0, 0, 0.78); backdrop-filter: blur(6px);
+      dialog.about-dialog[data-dialog-open="true"],
+      dialog.comments-dialog[data-dialog-open="true"],
+      dialog.search-dialog[data-dialog-open="true"] {
+        opacity: 1;
+        visibility: visible;
+        pointer-events: auto;
+      }
+      .about-dialog {
+        background: rgba(0, 0, 0, 0.78);
+        backdrop-filter: blur(6px);
       }
       .about-dialog__panel {
         background: var(--bg-2); border: 1px solid var(--border);
         border-radius: 14px; padding: 24px 28px;
+        width: min(720px, 92vw);
         max-height: 90vh; overflow: auto;
         box-shadow: 0 18px 56px rgba(0, 0, 0, 0.55);
       }
@@ -680,17 +727,18 @@
       .deck-column--focused {
         flex: 1 1 100%;
         max-width: none;
+        height: calc(100vh - 150px);
+        min-height: calc(100vh - 150px);
         z-index: 2;
       }
       .deck-column--focused .deck-column__body {
-        display: block;
-        column-width: 390px;
-        column-gap: 16px;
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+        align-content: start;
+        gap: 16px;
       }
       .deck-column--focused .deck-card {
-        display: inline-block;
-        width: 100%;
-        margin: 0 0 16px;
+        margin: 0;
       }
       .deck-column--focused .deck-empty {
         break-inside: avoid;
@@ -725,11 +773,10 @@
           min-height: 520px;
         }
         .deck-column--focused .deck-column__body {
-          column-width: auto;
-          column-count: 1;
+          grid-template-columns: 1fr;
         }
       }
-      .deck-column--focused .deck-column__btn--edit {
+      .deck-column--focused .deck-column__btn--focus-hidden {
         display: none;
       }
       .deck-column__header {
@@ -750,12 +797,17 @@
       }
       .deck-column__actions {
         display: flex;
-        gap: 4px;
-        justify-content: flex-end;
+        justify-content: space-between;
         align-items: center;
         margin-top: 10px;
         padding-top: 8px;
         border-top: 1px solid var(--border);
+      }
+      .deck-column__actions-left,
+      .deck-column__actions-right {
+        display: flex;
+        gap: 4px;
+        align-items: center;
       }
       .deck-column__btn {
         width: 28px;
@@ -774,9 +826,36 @@
         padding: 0 10px;
         font-weight: 600;
       }
+      .deck-column__btn--back {
+        width: auto;
+        min-width: 64px;
+        height: auto;
+        min-height: 28px;
+        padding: 0 14px;
+        white-space: normal;
+        line-height: 1.1;
+        background: var(--orange);
+        border-color: var(--orange);
+        color: #fff;
+        font-weight: 800;
+        box-shadow: 0 0 0 2px rgba(255, 102, 0, 0.18);
+      }
+      .deck-column__btn--back:hover {
+        background: var(--orange-dim);
+        border-color: var(--orange-dim);
+        color: #fff;
+      }
       .deck-column__btn:hover {
         border-color: var(--orange);
         color: var(--orange);
+      }
+      .deck-column__btn:disabled {
+        opacity: 0.42;
+        cursor: not-allowed;
+      }
+      .deck-column__btn:disabled:hover {
+        border-color: var(--border);
+        color: var(--fg);
       }
       .deck-column__top-status {
         position: relative;
@@ -852,7 +931,7 @@
       .deck-card {
         position: relative;
         break-inside: avoid;
-        padding: 0 0 14px 38px;
+        padding: 0 0 14px 66px;
         margin: 0 0 14px;
         border-bottom: 1px solid var(--border);
       }
@@ -878,7 +957,7 @@
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        width: 28px;
+        width: 56px;
         height: 28px;
         border: 1px solid var(--border);
         border-radius: 6px;
@@ -903,7 +982,7 @@
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        width: 28px;
+        width: 56px;
         min-height: 22px;
         padding: 2px 3px;
         border: 1px solid var(--border);
@@ -1002,18 +1081,14 @@
         line-height: 1.48;
       }
       .comments-dialog {
-        border: 0;
-        padding: 0;
-        background: transparent;
-        width: 95vw;
-        max-width: 95vw;
-        height: 95vh;
-        max-height: 95vh;
+        background: rgba(0, 0, 0, 0.36);
       }
-      .comments-dialog::backdrop { background: rgba(0, 0, 0, 0.36); }
+      .search-dialog {
+        background: rgba(0, 0, 0, 0.36);
+      }
       .comments-dialog__panel {
-        width: 100%;
-        height: 100%;
+        width: 95vw;
+        height: 95vh;
         display: flex;
         flex-direction: column;
         background: var(--bg-2);
@@ -1050,6 +1125,41 @@
       .comments-dialog__body {
         overflow-y: auto;
         padding: 16px 20px 22px;
+      }
+      .search-dialog__panel {
+        width: min(1100px, 95vw);
+        max-width: 95vw;
+        background: var(--bg-2);
+        color: var(--fg);
+        border: 1px solid var(--border);
+        border-top: 4px solid var(--orange);
+        border-radius: 12px;
+        box-shadow: 0 18px 56px rgba(0, 0, 0, 0.38);
+        overflow: hidden;
+      }
+      .search-dialog__header {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 18px 20px 14px;
+        border-bottom: 1px solid var(--border);
+        background: var(--bg-3);
+      }
+      .search-dialog__form {
+        display: flex;
+        gap: 10px;
+        padding: 14px 20px;
+        border-bottom: 1px solid var(--border);
+      }
+      .search-dialog__input {
+        flex: 1;
+        min-width: 0;
+        background: var(--bg);
+        color: var(--fg);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 10px 12px;
+        font: inherit;
       }
       .comments-preview__open {
         display: inline-block;
@@ -1120,11 +1230,11 @@
       }
       .editor-form__btn:hover { border-color: var(--orange); }
       .editor-form__btn--primary {
-        background: var(--orange); color: #000; border-color: var(--orange);
+        background: var(--orange); color: #fff; border-color: var(--orange);
         font-weight: 700;
       }
       .editor-form__btn--primary:hover {
-        background: #ff9a47; border-color: #ff9a47;
+        background: var(--orange-dim); border-color: var(--orange-dim); color: #fff;
       }
 
       /* ─── Footer ────────────────────────────────────────────── */
@@ -1206,11 +1316,11 @@
       }
       .setup-banner__btn:hover { border-color: var(--orange); }
       .setup-banner__btn--primary {
-        background: var(--orange); color: #000; border-color: var(--orange);
+        background: var(--orange); color: #fff; border-color: var(--orange);
         font-weight: 600;
       }
       .setup-banner__btn--primary:hover {
-        background: #ff9a47; border-color: #ff9a47;
+        background: var(--orange-dim); border-color: var(--orange-dim); color: #fff;
       }
     </style>
   </body>

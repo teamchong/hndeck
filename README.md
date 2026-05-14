@@ -1,22 +1,22 @@
 # HNDeck
 
-Column-based Hacker News reader, routed by Chrome's on-device Gemini Nano.
+Column-based Hacker News reader where you decide what to see, not an algorithm.
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/teamchong/hndeck)
 
 ## What It Is
 
 - Define Hacker News columns in plain English.
-- Raw columns use HN feeds like Top, New, Ask, Show, user submissions, or best stories this month.
-- Raw/source columns can also have a local text filter.
-- Custom columns use Gemini Nano in Chrome to route stories locally on your device.
-- Stories can appear in multiple columns.
-- Columns refresh independently and default to reloading every minute.
-- Your routing instructions, layout, and customization stay in your browser.
+- Standard columns pull from HN feeds: Top, New, Ask, Show, user submissions, best this month, or search.
+- Custom columns scan all of HN and use Gemini Nano to filter each story against your instruction — on-device, private, free.
+- Any column can have a custom instruction. Nano evaluates each story one at a time: keep or reject.
+- Your instructions, layout, and customization never leave your browser.
 
 ## Why
 
-HNDeck is a personal learning project for Chrome's Prompt API. Chrome may already have Gemini Nano on disk, taking a few GB of space. This project is my attempt to turn that into something useful: local AI reads small Hacker News batches, applies your routing instructions, and presents stories in columns you actually want to scan.
+Hacker News already decides what you see through upvotes and ranking. HNDeck lets you add your own filter on top — an AI that works for you, not an algorithm that works for everyone. Write "AI News" or "no AI" or "debugging, weird bugs, production incidents" and Nano filters stories locally on your device. No server, no account, no tracking.
+
+This is also a personal learning project for Chrome's Prompt API. Chrome may already have Gemini Nano on disk. This project turns that into something useful.
 
 ## Customization
 
@@ -24,7 +24,7 @@ HNDeck is intentionally editable from DevTools.
 
 - Edit DOM or CSS directly in the browser.
 - HNDeck saves a page snapshot to OPFS.
-- On reload, it restores your snapshot, then rerenders app-owned regions like deck columns, column order, routing instructions, and live story cards.
+- On reload, it restores your snapshot, then rerenders app-owned regions like deck columns, column order, instructions, and live story cards.
 - Reset with `await hnDeck.resetLayout()` or the Customize dialog's Reset layout button.
 
 ## Browser Requirements
@@ -32,14 +32,13 @@ HNDeck is intentionally editable from DevTools.
 - Chrome 138+ on desktop.
 - Gemini Nano / Prompt API available in that Chrome profile.
 - Enough free disk for Chrome's one-time on-device model download.
-- If Nano is not available, HNDeck still shows raw HN columns and displays setup guidance.
+- If Nano is not available, HNDeck still shows standard HN columns and displays setup guidance.
 
 Useful Chrome pages:
 
 - `chrome://on-device-internals`
 - `chrome://flags/#optimization-guide-on-device-model`
 - `chrome://flags/#prompt-api-for-gemini-nano`
-- `chrome://flags/#internal-debugging-page-urls` if internal debug URLs are hidden
 
 ## Local Development
 
@@ -61,15 +60,11 @@ pnpm deploy
 
 That runs `astro build && wrangler deploy`. The Worker name is `hndeck` in `wrangler.jsonc`.
 
-## How Nano Routing Works
+## How Filtering Works
 
-HNDeck does not `eval` model output.
-
-1. The app fetches an HN story batch.
-2. The prompt lists custom columns and candidate stories.
-3. Nano emits small DSL calls like `deck.place("columnId", storyId)` or `deck.place("", storyId)` for no matching custom column.
-4. The streaming executor parses those calls from text.
-5. The SDK validates story IDs and column IDs.
-6. Valid placements render story cards in matching columns.
-
-Nano writes explicit placement decisions; the app validates and applies them. Empty-column decisions are accepted but do not render a card.
+1. Each column fetches stories from its source (Top, New, all HN, search, etc.).
+2. If the column has a custom instruction, Nano evaluates each story individually.
+3. The prompt is structured XML with escaped content to prevent injection.
+4. Nano outputs YES or NO. Three attempts, then default reject.
+5. Decisions are cached in memory: same column + same instruction + same story = reuse.
+6. No story data is sent to any server. Nano runs entirely in the browser.

@@ -103,8 +103,8 @@ export async function createSession(
   try {
     return await LM.create({
       ...baseOptions,
-      temperature: 0.4, // a touch of creativity, not too unhinged
-      topK: 3,
+      temperature: 0,
+      topK: 1,
     });
   } catch (err) {
     // Sampling parameters likely rejected. Retry without.

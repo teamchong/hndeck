@@ -62,13 +62,15 @@ export interface HNCommentPreview {
   total: number;
 }
 
-export type HNFeed = "top" | "new" | "ask" | "show" | "user" | "best-month";
+export type HNFeed = "top" | "new" | "ask" | "show" | "user" | "best-month" | "search" | "all";
 
 export interface HNFeedOptions {
   /** HN username for feed === "user". */
   user?: string;
   /** Month in YYYY-MM for feed === "best-month". Empty = current month. */
   month?: string;
+  /** Search query for feed === "search". */
+  query?: string;
 }
 
 /** A non-story item — surfaced from /item but filtered out for the briefing. */
@@ -92,6 +94,7 @@ const itemCache = new Map<number, HNFeedItem | null>();
  * avoid hitting /topstories.json once per scroll-trigger.
  */
 const feedIdsCache = new Map<string, { ids: number[]; fetchedAt: number }>();
+let maxItemCache: { id: number; fetchedAt: number } | null = null;
 
 /** How long the in-memory id list is considered fresh. The list
  *  itself is recomputed by HN every ~few minutes upstream; this
@@ -263,6 +266,8 @@ export async function fetchFeedStoryBatch(
   signal?: AbortSignal,
   opts: HNFeedOptions = {},
 ): Promise<BatchResult> {
+  if (feed === "all") return fetchAllItemBatch(start, end, signal);
+  if (feed === "search") return fetchSearchStoryBatch(opts.query ?? "", start, end, signal);
   if (feed === "best-month") {
     const stories = await fetchBestMonthStories(start, end, signal, opts.month);
     return { stories, total: 500, hasMore: stories.length >= end - start };
@@ -279,6 +284,30 @@ export async function fetchFeedStoryBatch(
   };
 }
 
+async function fetchAllItemBatch(start: number, end: number, signal?: AbortSignal): Promise<BatchResult> {
+  const max = await fetchMaxItemId(signal);
+  const clampedStart = Math.max(0, Math.min(start, max));
+  const clampedEnd = Math.max(clampedStart, Math.min(end, max));
+  const ids: number[] = [];
+  for (let id = max - clampedStart; id > max - clampedEnd && id > 0; id--) ids.push(id);
+  const items = await Promise.all(ids.map((id) => fetchItem(id, signal)));
+  return {
+    stories: items.filter((item): item is HNStory => item !== null && item.type === "story"),
+    total: max,
+    hasMore: clampedEnd < max,
+  };
+}
+
+async function fetchMaxItemId(signal?: AbortSignal): Promise<number> {
+  if (maxItemCache && Date.now() - maxItemCache.fetchedAt < TOP_IDS_TTL_MS) return maxItemCache.id;
+  const r = await fetch(`${BASE}/maxitem.json`, { signal });
+  if (!r.ok) throw new Error(`HN maxitem: HTTP ${r.status}`);
+  const id = await r.json() as number;
+  if (!Number.isFinite(id)) throw new Error("HN maxitem: response is not a number");
+  maxItemCache = { id, fetchedAt: Date.now() };
+  return id;
+}
+
 export async function fetchSearchStoryBatch(
   query: string,
   start: number,
@@ -287,20 +316,25 @@ export async function fetchSearchStoryBatch(
 ): Promise<BatchResult<HNStory>> {
   const q = query.trim();
   if (!q) return { stories: [], total: 0, hasMore: false };
-  const hitsPerPage = Math.max(1, Math.min(1000, end));
+  const hitsPerPage = Math.max(1, Math.min(100, end - start));
+  const page = Math.max(0, Math.floor(start / hitsPerPage));
   const url =
     `https://hn.algolia.com/api/v1/search_by_date?tags=story` +
     `&query=${encodeURIComponent(q)}` +
+    `&page=${page}` +
     `&hitsPerPage=${hitsPerPage}`;
   const r = await fetch(url, { signal });
   if (!r.ok) throw new Error(`HN Algolia search: HTTP ${r.status}`);
-  const json = (await r.json()) as { hits?: AlgoliaHit[]; nbHits?: number };
+  const json = (await r.json()) as { hits?: AlgoliaHit[]; nbHits?: number; nbPages?: number; page?: number };
   const stories = (json.hits ?? [])
     .map(algoliaHitToStory)
-    .filter((s): s is HNStory => !!s)
-    .slice(start, end);
+    .filter((s): s is HNStory => !!s);
   const total = typeof json.nbHits === "number" ? json.nbHits : stories.length;
-  return { stories, total, hasMore: end < total };
+  const currentPage = typeof json.page === "number" ? json.page : page;
+  const hasMore = typeof json.nbPages === "number"
+    ? currentPage + 1 < json.nbPages
+    : (page + 1) * hitsPerPage < total;
+  return { stories, total, hasMore };
 }
 
 function feedEndpoint(feed: HNFeed): string {
@@ -311,12 +345,16 @@ function feedEndpoint(feed: HNFeed): string {
     case "show": return "showstories";
     case "user": return "user";
     case "best-month": return "beststories";
+    case "search": return "search";
+    case "all": return "maxitem";
   }
 }
 
 function feedCacheKey(feed: HNFeed, opts: HNFeedOptions): string {
   if (feed === "user") return `user:${opts.user?.trim() ?? ""}`;
   if (feed === "best-month") return `best-month:${normalizeMonth(opts.month)}`;
+  if (feed === "search") return `search:${opts.query?.trim() ?? ""}`;
+  if (feed === "all") return "all";
   return feed;
 }
 
