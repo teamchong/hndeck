@@ -1918,6 +1918,12 @@ function readMastheadSubtitle(): string {
 }
 
 function applyMasthead(state: AppState): void {
+  // Sync from <title> if user edited it directly in DevTools.
+  const currentTitle = document.title.trim();
+  if (currentTitle && currentTitle !== state.mastheadTitle) {
+    state.mastheadTitle = currentTitle;
+    queuePersistState(state);
+  }
   const titleLink = document.querySelector<HTMLElement>(".topbar__title-link");
   const title = document.querySelector<HTMLElement>(".topbar__title");
   const subtitle = document.querySelector<HTMLElement>(".topbar__subtitle");
