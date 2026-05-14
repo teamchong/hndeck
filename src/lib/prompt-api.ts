@@ -46,10 +46,13 @@ export async function checkAvailability(): Promise<ModelStatus> {
   const LM = (globalThis as unknown as { LanguageModel: ChromeLanguageModel }).LanguageModel;
 
   try {
-    const availability = await LM.availability({
-      expectedInputs: [{ type: "text", languages: ["en"] }],
-      expectedOutputs: [{ type: "text", languages: ["en"] }],
-    });
+    const availability = await Promise.race([
+      LM.availability({
+        expectedInputs: [{ type: "text", languages: ["en"] }],
+        expectedOutputs: [{ type: "text", languages: ["en"] }],
+      }),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Availability check timed out")), 5000)),
+    ]);
 
     switch (availability) {
       case "available":      return { kind: "available" };
