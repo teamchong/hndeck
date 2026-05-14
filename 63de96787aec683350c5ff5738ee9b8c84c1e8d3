@@ -1,0 +1,23 @@
+README.md
+  b454f51a6892b0b3 3,9-12,27,56-57,66-67
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "63de96787aec683350c5ff5738ee9b8c84c1e8d3",
+  "prompts": {
+    "b454f51a6892b0b3": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_1f8770333ffeLL89wAhppx4N8y",
+        "model": "anthropic/claude-opus-4-7"
+      },
+      "human_author": "Steven Chong",
+      "messages": [],
+      "total_additions": 10,
+      "total_deletions": 15,
+      "accepted_lines": 10,
+      "overriden_lines": 0
+    }
+  }
+}
