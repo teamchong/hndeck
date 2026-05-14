@@ -938,7 +938,6 @@ const MIN_ITEMS_PER_LOAD = 5;
 
 function shouldScanMore(runtime: ColumnRuntime, added: number): boolean {
   if (!runtime.hasMore) return false;
-  if (!runtime.column.instruction?.trim()) return false;
   if (added < MIN_ITEMS_PER_LOAD) return true;
   return !columnHasScrollableBacklog(runtime);
 }
