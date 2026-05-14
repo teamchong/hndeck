@@ -15,7 +15,7 @@ TweetDeck-style Hacker News reader, built to experiment with Chrome's Prompt API
 
 This is a personal learning project for Chrome's Prompt API. Chrome may already have Gemini Nano on disk. This project turns that into something useful.
 
-Nano is a small on-device model so the filtering is not perfect. I tried many other ideas for what to build with the Prompt API and this is the closest I got to something that kind of works. Hoping Chrome upgrades the on-device model over time, like [Prompt to Diagram](https://teamchong.github.io/turboquant-wasm/) which already works well with Gemini 2.5.
+Nano is a small on-device model so the filtering is not perfect. I tried many other ideas for what to build with the Prompt API and this is the closest I got to something that kind of works. Hoping Chrome upgrades the on-device model over time, like [Prompt to Diagram](https://teamchong.github.io/turboquant-wasm/) which works much better with a larger model.
 
 ## Customization
 
