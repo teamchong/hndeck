@@ -1,0 +1,21 @@
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "2346345058303d646f0846a0a40dcb30d3fe7a8d",
+  "prompts": {
+    "b454f51a6892b0b3": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_1f8770333ffeLL89wAhppx4N8y",
+        "model": "anthropic/claude-opus-4-7"
+      },
+      "human_author": "Steven Chong",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 11,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    }
+  }
+}
