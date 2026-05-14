@@ -317,7 +317,7 @@ async function fetchAllItemBatch(start: number, end: number, signal?: AbortSigna
   return {
     stories: items.filter((item): item is HNFeedItem => item !== null && item.type !== "comment"),
     total: max,
-    hasMore: clampedEnd < max,
+    hasMore: true, // all feed is effectively infinite
   };
 }
 
