@@ -37,6 +37,7 @@ const DEFAULT_AUTO_RELOAD_MS = AUTO_RELOAD_OPTIONS[0];
 const CARD_STALE_MS = 5 * 60_000;
 const OPFS_STATE_FILE = "hn-deck-state-v1.json";
 const OPFS_DOM_SNAPSHOT_FILE = "hn-deck-dom-v1.json";
+const OPFS_FILTER_CACHE_FILE = "hn-deck-filter-cache-v1.json";
 const APP_CSS_ID = "hn-deck-app-css";
 const CUSTOM_CSS_ID = "hn-deck-custom-css";
 const THEME_VARS_CSS_ID = "hn-deck-theme-vars";
@@ -57,8 +58,7 @@ const CSS_VAR_NAMES = [
   "--green",
   "--red",
 ] as const;
-const UI_SIZES = ["compact", "normal", "large"] as const;
-type UISize = (typeof UI_SIZES)[number];
+
 
 interface ColumnItem {
   storyId: number;
@@ -99,7 +99,6 @@ interface DOM {
   commentsTitle: HTMLElement;
   commentsMeta: HTMLElement;
   commentsBody: HTMLElement;
-  uiSizeBtn: HTMLButtonElement;
   resetState: HTMLButtonElement;
 }
 
@@ -129,7 +128,6 @@ interface AppState {
   routingInstructions: string;
   modelReady: boolean;
   setupDismissed: boolean;
-  uiSize: UISize;
   focusedColumnId: string | null;
   editingColumnId: string | null;
   draggingColumnId: string | null;
@@ -148,6 +146,7 @@ interface AppState {
   domSnapshotObserver?: MutationObserver;
   customCSSObserver?: MutationObserver;
   cssVarWatchTimer?: number;
+  filterCacheTimer: number | null;
   commentsAbort?: AbortController;
   composeAbort?: AbortController;
 }
@@ -156,7 +155,6 @@ interface PersistedState {
   deck: Deck;
   routingInstructions: string;
   setupDismissed: boolean;
-  uiSize: UISize;
   mastheadTitle: string;
   mastheadSubtitle: string;
   mastheadTitleVisible: boolean;
@@ -206,17 +204,17 @@ async function startDeckAppAsync(): Promise<void> {
   const dom = getDOM();
   const persistenceAvailable = await isPersistenceAvailable();
   const persisted = await loadPersistedState();
+  const filterCache = await loadFilterCache();
   const state: AppState = {
     deck: persisted?.deck ?? defaultDeck(),
     columns: new Map(),
     columnItems: new Map(),
     storyById: new Map(),
-    sourceFilterDecisions: new Map(),
+    sourceFilterDecisions: filterCache,
     promptBus: createPromptBus(),
     routingInstructions: persisted?.routingInstructions ?? "",
     modelReady: false,
     setupDismissed: persisted?.setupDismissed ?? false,
-    uiSize: persisted?.uiSize ?? "normal",
     focusedColumnId: null,
     editingColumnId: null,
     draggingColumnId: null,
@@ -229,9 +227,9 @@ async function startDeckAppAsync(): Promise<void> {
     persistTimer: null,
     domSnapshotTimer: null,
     domSnapshotRepairing: false,
+    filterCacheTimer: null,
   };
 
-  applyUISize(state);
   syncAppOwnedControls(state, dom);
   applyMasthead(state);
   observeMastheadEdits(state);
@@ -341,7 +339,7 @@ function ensureCoreDOM(baseline: DOMBaseline): void {
   ensureChildElementWithChildren("setup-banner", main, ["setup-title", "setup-detail", "setup-begin", "setup-retry", "setup-dismiss"], baseline);
   ensureChildElement("deck", main, baseline);
   ensureDialogWithChildren("about-dialog", ["about-close"], baseline);
-  ensureDialogWithChildren("editor-dialog", ["editor-close", "editor-done", "routing-instructions", "ui-size-btn", "reset-state"], baseline);
+  ensureDialogWithChildren("editor-dialog", ["editor-close", "editor-done", "routing-instructions", "reset-state"], baseline);
   ensureDialogWithChildren("column-dialog", ["column-close", "column-title", "column-source", "column-instruction", "column-save", "column-cancel"], baseline);
   ensureDialogWithChildren("comments-dialog", ["comments-close", "comments-title", "comments-meta", "comments-body"], baseline);
   ensureDialogWithChildren("search-dialog", ["search-close", "search-form", "search-input", "search-meta"], baseline);
@@ -455,7 +453,6 @@ function getDOM(): DOM {
     commentsTitle: get("comments-title"),
     commentsMeta: get("comments-meta"),
     commentsBody: get("comments-body"),
-    uiSizeBtn: get<HTMLButtonElement>("ui-size-btn"),
     resetState: get<HTMLButtonElement>("reset-state"),
   };
 }
@@ -470,7 +467,6 @@ function tryGetDOM(): DOM | null {
 
 function syncAppOwnedControls(state: AppState, dom: DOM): void {
   if (dom.instructionsBox.value !== state.routingInstructions) dom.instructionsBox.value = state.routingInstructions;
-  updateUISizeButton(state, dom);
 }
 
 // ─── Control wiring ──────────────────────────────────────────────────
@@ -487,7 +483,6 @@ function bindCoreControls(state: AppState, dom: DOM): void {
     queuePersistState(state);
     setSetup(dom, { kind: "hidden" }, state);
   };
-  dom.uiSizeBtn.onclick = () => toggleUISize(state, dom);
   dom.searchBtn.onclick = () => openSearchDialog(dom);
   dom.searchClose.onclick = () => closeDialog(dom.searchDialog);
   dom.searchDialog.onclick = (ev) => {
@@ -977,10 +972,12 @@ async function filterSingleItem(state: AppState, runtime: ColumnRuntime, item: H
     const decision = parseBooleanFilterOutput(output);
     if (decision !== null) {
       state.sourceFilterDecisions.set(key, decision);
+      queuePersistFilterCache(state);
       return;
     }
   }
   state.sourceFilterDecisions.set(key, false);
+  queuePersistFilterCache(state);
 }
 
 function parseBooleanFilterOutput(output: string): boolean | null {
@@ -1138,37 +1135,6 @@ function formatReloadInterval(ms: number): string {
   return `${Math.round(ms / 1000)}s`;
 }
 
-// ─── UI size ─────────────────────────────────────────────────────────
-
-function toggleUISize(state: AppState, dom: DOM): void {
-  const current = UI_SIZES.indexOf(state.uiSize);
-  state.uiSize = UI_SIZES[(current + 1) % UI_SIZES.length] ?? "normal";
-  applyUISize(state);
-  updateUISizeButton(state, dom);
-  queuePersistState(state);
-}
-
-function applyUISize(state: AppState): void {
-  document.documentElement.dataset.uiSize = state.uiSize;
-}
-
-function updateUISizeButton(state: AppState, dom: DOM): void {
-  dom.uiSizeBtn.textContent = `UI size: ${labelUISize(state.uiSize)}`;
-}
-
-function labelUISize(size: UISize): string {
-  switch (size) {
-    case "compact": return "Compact";
-    case "large": return "Large";
-    case "normal":
-    default: return "Normal";
-  }
-}
-
-function coerceUISize(value: unknown): UISize {
-  return typeof value === "string" && UI_SIZES.includes(value as UISize) ? value as UISize : "normal";
-}
-
 // ─── Column remove helper ────────────────────────────────────────────
 
 function setColumnRemoveDisabled(runtime: ColumnRuntime, disabled: boolean): void {
@@ -1240,7 +1206,6 @@ async function loadPersistedState(): Promise<PersistedState | null> {
           ? raw.readerContext
           : "",
       setupDismissed: typeof raw.setupDismissed === "boolean" ? raw.setupDismissed : false,
-      uiSize: coerceUISize(raw.uiSize),
       mastheadTitle: typeof raw.mastheadTitle === "string" ? raw.mastheadTitle : readMastheadTitle(),
       mastheadSubtitle: typeof raw.mastheadSubtitle === "string" ? raw.mastheadSubtitle : readMastheadSubtitle(),
       mastheadTitleVisible: typeof raw.mastheadTitleVisible === "boolean" ? raw.mastheadTitleVisible : true,
@@ -1268,7 +1233,6 @@ async function persistStateNow(state: AppState): Promise<void> {
     deck: state.deck,
     routingInstructions: state.routingInstructions,
     setupDismissed: state.setupDismissed,
-    uiSize: state.uiSize,
     mastheadTitle: state.mastheadTitle,
     mastheadSubtitle: state.mastheadSubtitle,
     mastheadTitleVisible: state.mastheadTitleVisible,
@@ -1342,7 +1306,11 @@ function readPersistableDOMSnapshot(): DOMSnapshot {
 async function deletePersistedState(): Promise<void> {
   const root = await getOPFSRoot();
   if (!root) return;
-  await Promise.all([removeOPFSEntryIfExists(root, OPFS_STATE_FILE), removeOPFSEntryIfExists(root, OPFS_DOM_SNAPSHOT_FILE)]);
+  await Promise.all([
+    removeOPFSEntryIfExists(root, OPFS_STATE_FILE),
+    removeOPFSEntryIfExists(root, OPFS_DOM_SNAPSHOT_FILE),
+    removeOPFSEntryIfExists(root, OPFS_FILTER_CACHE_FILE),
+  ]);
 }
 
 async function removeOPFSEntryIfExists(root: FileSystemDirectoryHandle, name: string): Promise<void> {
@@ -1362,6 +1330,43 @@ async function getOPFSRoot(): Promise<FileSystemDirectoryHandle | null> {
 
 async function isPersistenceAvailable(): Promise<boolean> {
   return (await getOPFSRoot()) !== null;
+}
+
+async function loadFilterCache(): Promise<Map<string, boolean>> {
+  try {
+    const root = await getOPFSRoot();
+    if (!root) return new Map();
+    const handle = await root.getFileHandle(OPFS_FILTER_CACHE_FILE);
+    const raw = JSON.parse(await (await handle.getFile()).text()) as unknown;
+    if (!raw || typeof raw !== "object") return new Map();
+    const entries = raw as Record<string, boolean>;
+    const map = new Map<string, boolean>();
+    for (const [k, v] of Object.entries(entries)) {
+      if (typeof v === "boolean" && k.startsWith(SOURCE_FILTER_CACHE_VERSION)) map.set(k, v);
+    }
+    return map;
+  } catch {
+    return new Map();
+  }
+}
+
+function queuePersistFilterCache(state: AppState): void {
+  if (state.filterCacheTimer !== null) window.clearTimeout(state.filterCacheTimer);
+  state.filterCacheTimer = window.setTimeout(() => {
+    state.filterCacheTimer = null;
+    void persistFilterCacheNow(state);
+  }, 2000);
+}
+
+async function persistFilterCacheNow(state: AppState): Promise<void> {
+  const root = await getOPFSRoot();
+  if (!root) return;
+  const obj: Record<string, boolean> = {};
+  for (const [k, v] of state.sourceFilterDecisions) obj[k] = v;
+  const handle = await root.getFileHandle(OPFS_FILTER_CACHE_FILE, { create: true });
+  const writable = await handle.createWritable();
+  await writable.write(JSON.stringify(obj));
+  await writable.close();
 }
 
 // ─── Story cards ─────────────────────────────────────────────────────
@@ -1613,6 +1618,7 @@ function clearFilterDecisions(state: AppState, columnId: string): void {
   for (const key of state.sourceFilterDecisions.keys()) {
     if (key.includes(`\n${columnId}\n`)) state.sourceFilterDecisions.delete(key);
   }
+  queuePersistFilterCache(state);
 }
 
 function syncColumnSourceState(dom: DOM, updateTitle: boolean): void {
@@ -2031,7 +2037,6 @@ function exposeOperationalConsoleAPI(state: AppState): void {
       deck: structuredClone(state.deck),
       routingInstructions: state.routingInstructions,
       setupDismissed: state.setupDismissed,
-      uiSize: state.uiSize,
       mastheadTitle: state.mastheadTitle,
       mastheadSubtitle: state.mastheadSubtitle,
       customCSSLength: state.customCSS.length,

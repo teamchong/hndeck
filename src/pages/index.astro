@@ -206,9 +206,6 @@
         </div>
 
         <div class="editor-form__footer">
-          <button id="ui-size-btn" class="editor-form__btn" type="button">
-            UI size: Normal
-          </button>
           <button id="reset-state" class="editor-form__btn editor-form__btn--danger" type="button">
             Reset layout
           </button>
@@ -377,10 +374,7 @@
         --font-display: "Playfair Display", "Iowan Old Style",
           Georgia, "Times New Roman", serif;
         --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-        --ui-font-size: 16px;
 
-      html[data-ui-size="compact"] { --ui-font-size: 14px; }
-      html[data-ui-size="large"] { --ui-font-size: 18px; }
       * { box-sizing: border-box; }
       html, body {
         margin: 0; padding: 0;
@@ -395,7 +389,7 @@
           radial-gradient(rgba(0, 0, 0, 0.025) 1px, transparent 1px);
         background-size: 3px 3px;
       }
-      body { font-size: var(--ui-font-size); }
+
       code, pre { font-family: var(--font-mono); }
       a { color: var(--orange); text-decoration-thickness: 1px; }
       a:hover { text-decoration: underline; }
