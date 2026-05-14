@@ -10,7 +10,7 @@ import {
   hostOf,
   stripHtml,
   type HNFeedItem,
-  type HNStory,
+
   type HNFeed,
   type HNCommentNode,
 } from "./hn-client";
@@ -180,7 +180,7 @@ interface DOMBaseline extends DOMSnapshot {
 
 function columnFeed(column: Column): HNFeed {
   if (column.source === "custom") return "all";
-  return column.source;
+  return column.source as HNFeed;
 }
 
 // ─── Boot ────────────────────────────────────────────────────────────
@@ -349,7 +349,7 @@ function ensureCoreDOM(baseline: DOMBaseline): void {
 }
 
 function ensureTopbar(baseline: DOMBaseline): void {
-  const required = ["search-btn", "add-column-btn", "editor-btn", "about-btn", "github-link"];
+  const required = ["search-btn", "add-column-btn", "editor-btn"];
   const current = document.querySelector<HTMLElement>(".topbar");
   const next = cloneBaselineElement<HTMLElement>(baseline, ".topbar");
   const currentVersion = current?.dataset.appVersion ?? "";
@@ -933,6 +933,7 @@ function endOfFeedLabel(column: Column): string {
     case "new": return "End of HN new stories";
     case "ask": return "End of Ask HN";
     case "show": return "End of Show HN";
+    case "jobs": return "End of HN jobs";
     case "user": return "End of user activity";
     case "best-month": return "End of monthly best";
     case "search": return "End of search results";
@@ -950,25 +951,24 @@ async function filterStories(state: AppState, runtime: ColumnRuntime, stories: H
   const instruction = runtime.column.instruction?.trim();
   if (!instruction || stories.length === 0) return stories;
 
-  const onlyStories = stories.filter((s): s is HNStory => s.type === "story");
-  for (const story of onlyStories) {
-    if (!state.sourceFilterDecisions.has(filterCacheKey(runtime.column, story.id))) {
-      await filterSingleStory(state, runtime, story);
+  for (const item of stories) {
+    if (!state.sourceFilterDecisions.has(filterCacheKey(runtime.column, item.id))) {
+      await filterSingleItem(state, runtime, item);
     }
   }
 
-  return onlyStories.filter((story) => state.sourceFilterDecisions.get(filterCacheKey(runtime.column, story.id)) === true);
+  return stories.filter((item) => state.sourceFilterDecisions.get(filterCacheKey(runtime.column, item.id)) === true);
 }
 
-async function filterSingleStory(state: AppState, runtime: ColumnRuntime, story: HNStory): Promise<void> {
-  const key = filterCacheKey(runtime.column, story.id);
+async function filterSingleItem(state: AppState, runtime: ColumnRuntime, item: HNFeedItem): Promise<void> {
+  const key = filterCacheKey(runtime.column, item.id);
   if (state.sourceFilterDecisions.has(key)) return;
   for (let attempt = 0; attempt < 3; attempt++) {
     let output = "";
     await state.promptBus.run({
       systemPrompt: buildSourceFilterSystemPrompt({
         column: runtime.column,
-        story,
+        item,
         globalInstruction: state.routingInstructions,
       }),
       userPrompt: buildSourceFilterUserPrompt(attempt > 0),
@@ -1366,34 +1366,49 @@ async function isPersistenceAvailable(): Promise<boolean> {
 
 // ─── Story cards ─────────────────────────────────────────────────────
 
-function renderStoryCard(story: HNFeedItem, fresh = false): HTMLElement {
+function renderStoryCard(item: HNFeedItem, fresh = false): HTMLElement {
   const el = document.createElement("article");
-  el.className = ["deck-card", fresh ? "deck-card--fresh" : ""]
+  el.className = ["deck-card", `deck-card--${item.type}`, fresh ? "deck-card--fresh" : ""]
     .filter(Boolean)
     .join(" ");
-  el.dataset.storyId = String(story.id);
+  el.dataset.storyId = String(item.id);
   if (fresh) window.setTimeout(() => el.classList.remove("deck-card--fresh"), 45_000);
-  const by = story.by ?? "unknown";
-  const isComment = story.type === "comment";
-  const host = isComment ? "news.ycombinator.com" : hostOf(story.url);
-  const titleHref = isComment ? hnPermalink(story.id) : story.url || hnPermalink(story.id);
-  const title = isComment ? `Comment by ${by}` : story.title;
-  const bodyText = isComment ? stripHtml(story.text) : undefined;
-  const ts = story.time ? new Date(story.time * 1000) : null;
+  const by = item.by ?? "unknown";
+  const ts = item.time ? new Date(item.time * 1000) : null;
   const shortTime = ts ? relativeTime(ts) : "unknown time";
   const fullTime = ts ? formatFullTime(ts) : "unknown time";
-  const meta = isComment ? renderCommentMeta(story, by, shortTime, fullTime) : renderStoryMeta(story, host, by, shortTime, fullTime);
+
+  if (item.type === "comment") {
+    el.innerHTML = renderCommentCard(item, by, shortTime, fullTime);
+    bindCardTime(el);
+    return el;
+  }
+
+  // story, job, poll all have title
+  const title = item.title;
+  const url = "url" in item ? item.url : undefined;
+  const text = "text" in item ? item.text : undefined;
+  const host = hostOf(url);
+  const titleHref = url || hnPermalink(item.id);
+  const hasScore = item.type === "story" || item.type === "poll";
+  const score = hasScore ? (item as { score: number }).score : 0;
+  const hasComments = item.type === "story" || item.type === "poll";
+  const comments = hasComments ? ((item as { descendants?: number }).descendants ?? 0) : 0;
+  const bodyPreview = !url && text ? escapeHtml(stripHtml(text).slice(0, 160)) : "";
+  const bodyTooltip = !url && text ? escapeAttr(stripHtml(text).slice(0, 300)) : "";
+
   el.innerHTML = `
     <a class="deck-card__vote"
-      href="${escapeAttr(hnPermalink(story.id))}"
+      href="${escapeAttr(hnPermalink(item.id))}"
       target="_blank" rel="noopener noreferrer"
       title="Open on HN to upvote">▲</a>
-    ${isComment ? "" : `<a class="deck-card__score" href="${escapeAttr(hnPermalink(story.id))}" target="_blank" rel="noopener noreferrer" title="${story.score} points">${formatScore(story.score)}</a>`}
+    ${hasScore ? `<a class="deck-card__score" href="${escapeAttr(hnPermalink(item.id))}" target="_blank" rel="noopener noreferrer" title="${score} points">${formatScore(score)}</a>` : ""}
     <div class="deck-card__title-row">
       <h3 class="deck-card__title">
         <a class="deck-card__title-link"
           href="${escapeAttr(titleHref)}"
-          target="_blank" rel="noopener noreferrer">${escapeHtml(title)}</a>
+          target="_blank" rel="noopener noreferrer"
+          ${bodyTooltip ? `title="${bodyTooltip}"` : ""}>${escapeHtml(title)}</a>
       </h3>
       <img
         class="deck-card__favicon"
@@ -1405,16 +1420,18 @@ function renderStoryCard(story: HNFeedItem, fresh = false): HTMLElement {
         referrerpolicy="no-referrer"
       />
     </div>
-    ${meta}
-    ${bodyText ? `<p class="deck-card__body">${escapeHtml(bodyText)}</p>` : ""}
+    <p class="deck-card__meta">
+      ${hasComments ? `<a class="deck-card__comments" href="${escapeAttr(hnPermalink(item.id))}" target="_blank" rel="noopener noreferrer" data-comments-preview="${item.id}" title="${comments} ${comments === 1 ? "comment" : "comments"}" aria-label="${comments} ${comments === 1 ? "comment" : "comments"}">${comments} 💬</a><span class="deck-card__dot">·</span>` : ""}
+      ${item.type === "job" ? `<span class="deck-card__badge">job</span><span class="deck-card__dot">·</span>` : ""}
+      ${item.type === "poll" ? `<span class="deck-card__badge">poll</span><span class="deck-card__dot">·</span>` : ""}
+      <span>by <a href="${escapeAttr(hnUserUrl(by))}" target="_blank" rel="noopener noreferrer">${escapeHtml(by)}</a></span>
+      <span class="deck-card__dot">·</span>
+      <button class="deck-card__time" type="button" data-short="${escapeAttr(shortTime)}" data-full="${escapeAttr(fullTime)}" title="${escapeAttr(fullTime)}">${escapeHtml(shortTime)}</button>
+      <a class="deck-card__domain" href="${escapeAttr(hnFromSiteUrl(host))}" target="_blank" rel="noopener noreferrer">${escapeHtml(host)}</a>
+    </p>
+    ${bodyPreview ? `<p class="deck-card__body">${bodyPreview}</p>` : ""}
   `;
-  const timeBtn = el.querySelector<HTMLButtonElement>(".deck-card__time");
-  timeBtn?.addEventListener("click", () => {
-    if (!timeBtn.dataset.full || !timeBtn.dataset.short) return;
-    timeBtn.textContent = timeBtn.textContent === timeBtn.dataset.full
-      ? timeBtn.dataset.short
-      : timeBtn.dataset.full;
-  });
+  bindCardTime(el);
   const commentsLink = el.querySelector<HTMLAnchorElement>("[data-comments-preview]");
   commentsLink?.addEventListener("click", (ev) => {
     if (ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey || ev.button !== 0) return;
@@ -1424,18 +1441,33 @@ function renderStoryCard(story: HNFeedItem, fresh = false): HTMLElement {
   return el;
 }
 
-function renderStoryMeta(story: Extract<HNFeedItem, { type: "story" }>, host: string, by: string, shortTime: string, fullTime: string): string {
-  const comments = story.descendants ?? 0;
+function renderCommentCard(comment: Extract<HNFeedItem, { type: "comment" }>, by: string, shortTime: string, fullTime: string): string {
   return `
+    <div class="deck-card__title-row">
+      <h3 class="deck-card__title">
+        <a class="deck-card__title-link" href="${escapeAttr(hnPermalink(comment.id))}" target="_blank" rel="noopener noreferrer">Comment by ${escapeHtml(by)}</a>
+      </h3>
+    </div>
     <p class="deck-card__meta">
-      <a class="deck-card__comments" href="${escapeAttr(hnPermalink(story.id))}" target="_blank" rel="noopener noreferrer" data-comments-preview="${story.id}" title="${comments} ${comments === 1 ? "comment" : "comments"}" aria-label="${comments} ${comments === 1 ? "comment" : "comments"}">${comments} 💬</a>
-      <span class="deck-card__dot">·</span>
+      <a href="${escapeAttr(hnPermalink(comment.id))}" target="_blank" rel="noopener noreferrer">thread</a>
+      ${comment.parent ? `<span>·</span><a href="${escapeAttr(hnPermalink(comment.parent))}" target="_blank" rel="noopener noreferrer">parent</a>` : ""}
+      <span>·</span>
       <span>by <a href="${escapeAttr(hnUserUrl(by))}" target="_blank" rel="noopener noreferrer">${escapeHtml(by)}</a></span>
-      <span class="deck-card__dot">·</span>
+      <span>·</span>
       <button class="deck-card__time" type="button" data-short="${escapeAttr(shortTime)}" data-full="${escapeAttr(fullTime)}" title="${escapeAttr(fullTime)}">${escapeHtml(shortTime)}</button>
-      <a class="deck-card__domain" href="${escapeAttr(hnFromSiteUrl(host))}" target="_blank" rel="noopener noreferrer">${escapeHtml(host)}</a>
     </p>
+    <p class="deck-card__body">${escapeHtml(stripHtml(comment.text))}</p>
   `;
+}
+
+function bindCardTime(el: HTMLElement): void {
+  const timeBtn = el.querySelector<HTMLButtonElement>(".deck-card__time");
+  timeBtn?.addEventListener("click", () => {
+    if (!timeBtn.dataset.full || !timeBtn.dataset.short) return;
+    timeBtn.textContent = timeBtn.textContent === timeBtn.dataset.full
+      ? timeBtn.dataset.short
+      : timeBtn.dataset.full;
+  });
 }
 
 // ─── Comments preview ────────────────────────────────────────────────
@@ -1458,8 +1490,10 @@ async function openCommentsPreview(storyId: number): Promise<void> {
     const preview = await fetchCommentPreview(storyId, abort.signal);
     dom.commentsTitle.textContent = preview.story.title;
     dom.commentsMeta.textContent = `${preview.total} ${preview.total === 1 ? "comment" : "comments"}`;
+    const storyBody = preview.story.text ? `<div class="comments-preview__body">${escapeHtml(stripHtml(preview.story.text))}</div>` : "";
     dom.commentsBody.innerHTML = `
       <a class="comments-preview__open" href="${escapeAttr(hnPermalink(preview.story.id))}" target="_blank" rel="noopener noreferrer">Open full thread on HN ↗</a>
+      ${storyBody}
       ${preview.comments.length > 0 ? preview.comments.map((node) => renderCommentPreviewNode(node, 0)).join("") : `<p class="deck-empty">No comments yet.</p>`}
     `;
   } catch (err) {
@@ -1490,19 +1524,6 @@ function renderCommentPreviewNode(node: HNCommentNode, depth: number): string {
       <p class="comments-preview__text">${escapeHtml(stripHtml(node.comment.text))}</p>
       ${node.children.map((child) => renderCommentPreviewNode(child, depth + 1)).join("")}
     </details>
-  `;
-}
-
-function renderCommentMeta(comment: Extract<HNFeedItem, { type: "comment" }>, by: string, shortTime: string, fullTime: string): string {
-  return `
-    <p class="deck-card__meta">
-      <a href="${escapeAttr(hnPermalink(comment.id))}" target="_blank" rel="noopener noreferrer">comment thread</a>
-      ${comment.parent ? `<span>·</span><a href="${escapeAttr(hnPermalink(comment.parent))}" target="_blank" rel="noopener noreferrer">parent</a>` : ""}
-      <span>·</span>
-      <span>by <a href="${escapeAttr(hnUserUrl(by))}" target="_blank" rel="noopener noreferrer">${escapeHtml(by)}</a></span>
-      <span>·</span>
-      <button class="deck-card__time" type="button" data-short="${escapeAttr(shortTime)}" data-full="${escapeAttr(fullTime)}" title="${escapeAttr(fullTime)}">${escapeHtml(shortTime)}</button>
-    </p>
   `;
 }
 
@@ -1563,7 +1584,7 @@ function saveColumnDialog(state: AppState, dom: DOM): void {
   const editingId = state.editingColumnId;
   const instruction = dom.columnInstruction.value.trim() || undefined;
   const next: Omit<Column, "id"> =
-    source === "top" || source === "new" || source === "ask" || source === "show"
+    source === "top" || source === "new" || source === "ask" || source === "show" || source === "jobs"
       ? { source, title, instruction }
       : source === "user"
         ? { source, title, feedUser: title, instruction }
@@ -1604,6 +1625,7 @@ function defaultColumnTitle(source: string): string {
     case "new": return "New";
     case "ask": return "Ask";
     case "show": return "Show";
+    case "jobs": return "Jobs";
     case "user": return "hacker";
     case "best-month": return "Best this month";
     case "search": return "cloudflare";

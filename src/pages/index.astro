@@ -136,7 +136,7 @@
 
         <p class="about-dialog__caption">
           Hacker News already decides what I see through upvotes and ranking.
-          I wanted to add my own filter — an AI that works for me, not an
+          I wanted to add my own filter: an AI that works for me, not an
           algorithm that works for everyone.
         </p>
 
@@ -148,7 +148,7 @@
           </p>
           <p>
             This is also a personal learning project for Chrome's Prompt API.
-            Chrome may already have Gemini Nano on disk — this project turns
+            Chrome may already have Gemini Nano on disk. This project turns
             that into something useful.
           </p>
           <p>
@@ -242,6 +242,7 @@
             <option value="new">New</option>
             <option value="ask">Ask</option>
             <option value="show">Show</option>
+            <option value="jobs">Jobs</option>
             <option value="user">User submissions</option>
             <option value="best-month">Best stories this month</option>
             <option value="search">Search HN</option>
@@ -346,7 +347,7 @@
          on top of HN's colors so the page looks like HN's evening
          edition rather than a separate tech app. */
       /* Broadsheet palette: warm cream paper, near-black ink, grey
-         metadata, orange used SPARINGLY as accent — never as a wall.
+         metadata, orange used SPARINGLY as accent, never as a wall.
          The orange is a thin reference stripe and the link colour,
          not the dominant chrome. The point is to present HN like a
          hand-set printed paper, not to clone HN's UI. */
@@ -441,7 +442,7 @@
          A thin orange reference stripe across the top (the only
          direct nod to HN), then a cream/paper masthead with a big
          serif clickable title, italic byline-style subtitle, and a
-         double-rule below — like a printed-paper front page. */
+         double-rule below, like a printed-paper front page. */
       .topbar {
         position: relative;
         display: flex; justify-content: space-between; align-items: center;
@@ -1079,6 +1080,27 @@
         color: var(--fg-mid);
         font-size: 13.5px;
         line-height: 1.48;
+      }
+      .deck-card__badge {
+        display: inline-block;
+        font-size: 11px;
+        font-weight: 600;
+        padding: 1px 5px;
+        border-radius: 3px;
+        background: var(--bg-3);
+        color: var(--fg-mid);
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+      }
+      .comments-preview__body {
+        margin: 8px 0 16px;
+        padding: 10px 12px;
+        background: var(--bg-2);
+        border-radius: 6px;
+        color: var(--fg);
+        font-size: 14px;
+        line-height: 1.5;
+        white-space: pre-wrap;
       }
       .comments-dialog {
         background: rgba(0, 0, 0, 0.36);

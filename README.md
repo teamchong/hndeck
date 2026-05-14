@@ -8,13 +8,13 @@ Column-based Hacker News reader where you decide what to see, not an algorithm.
 
 - Define Hacker News columns in plain English.
 - Standard columns pull from HN feeds: Top, New, Ask, Show, user submissions, best this month, or search.
-- Custom columns scan all of HN and use Gemini Nano to filter each story against your instruction — on-device, private, free.
+- Custom columns scan all of HN and use Gemini Nano to filter each story against your instruction. On-device, private, free.
 - Any column can have a custom instruction. Nano evaluates each story one at a time: keep or reject.
 - Your instructions, layout, and customization never leave your browser.
 
 ## Why
 
-Hacker News already decides what you see through upvotes and ranking. HNDeck lets you add your own filter on top — an AI that works for you, not an algorithm that works for everyone. Write "AI News" or "no AI" or "debugging, weird bugs, production incidents" and Nano filters stories locally on your device. No server, no account, no tracking.
+Hacker News already decides what you see through upvotes and ranking. HNDeck lets you add your own filter on top: an AI that works for you, not an algorithm that works for everyone. Write "AI News" or "no AI" or "debugging, weird bugs, production incidents" and Nano filters stories locally on your device. No server, no account, no tracking.
 
 This is also a personal learning project for Chrome's Prompt API. Chrome may already have Gemini Nano on disk. This project turns that into something useful.
 

@@ -90,7 +90,7 @@ export function classifyFailure(
   if (info.isSafari) return { kind: "wrong-browser", browser: "Safari" };
 
   // Chrome-family but probably not real Chrome (Brave/Opera with custom builds, etc.)
-  // For now we treat Edge as Chrome — it ships the same API on the same schedule.
+  // For now we treat Edge as Chrome. It ships the same API on the same schedule.
   if (!info.isChrome && !info.isEdge && !info.isOtherChromium) {
     return { kind: "wrong-browser", browser: "this browser" };
   }
@@ -104,7 +104,7 @@ export function classifyFailure(
   // Could be: ChromeOS on a non-Plus device, missing flag, an enterprise lockdown.
   if (!apiPresent) return { kind: "api-missing" };
 
-  // API exists but availability returned "unavailable" — likely a
+  // API exists but availability returned "unavailable". Likely a
   // hardware / storage / metered-network gate.
   return { kind: "model-unavailable", reason: availabilityReason };
 }
@@ -114,7 +114,7 @@ export interface GuideContent {
   intro: string;
   /**
    * Each step is a piece of HTML. The renderer numbers them and
-   * displays them as a list. The HTML is trusted — we author it here,
+   * displays them as a list. The HTML is trusted; we author it here,
    * not from user/model input.
    */
   steps: string[];

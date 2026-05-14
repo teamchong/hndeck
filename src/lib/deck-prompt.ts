@@ -1,12 +1,12 @@
 /** Prompt builder for Nano's one-story source filter. */
 
 import type { Column } from "./deck";
-import type { HNStory } from "./hn-client";
+import type { HNFeedItem } from "./hn-client";
 import { stripHtml } from "./hn-client";
 
 export interface SourceFilterPromptOptions {
   column: Column;
-  story: HNStory;
+  item: HNFeedItem;
   globalInstruction?: string;
 }
 
@@ -17,11 +17,13 @@ function esc(s: string): string {
 export function buildSourceFilterSystemPrompt(opts: SourceFilterPromptOptions): string {
   const instruction = opts.column.instruction?.trim() || "Show all stories.";
   const global = opts.globalInstruction?.trim();
-  const s = opts.story;
+  const item = opts.item;
 
-  const aParts: string[] = [`  <title>${esc(s.title)}</title>`];
-  if (s.url) aParts.push(`  <url>${esc(s.url)}</url>`);
-  if (s.text) aParts.push(`  <body>${esc(stripHtml(s.text).slice(0, 200))}</body>`);
+  const aParts: string[] = [];
+  if (item.type !== "comment") aParts.push(`  <type>${item.type}</type>`);
+  if ("title" in item && item.title) aParts.push(`  <title>${esc(item.title)}</title>`);
+  if ("url" in item && item.url) aParts.push(`  <url>${esc(item.url)}</url>`);
+  if ("text" in item && item.text) aParts.push(`  <body>${esc(stripHtml(item.text).slice(0, 200))}</body>`);
 
   return [
     "<A>",

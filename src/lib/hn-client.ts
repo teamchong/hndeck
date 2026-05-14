@@ -3,7 +3,7 @@
  *
  * HN's public read API is at https://hacker-news.firebaseio.com/v0/.
  * It's free, unauthenticated, fast, and CORS-enabled. We use it
- * directly from the browser — no proxy needed.
+ * directly from the browser, no proxy needed.
  *
  * Endpoints we touch:
  *   GET /topstories.json       → number[] of item ids, ordered by score
@@ -39,6 +39,29 @@ export interface HNStory {
   kids?: number[];
 }
 
+export interface HNJob {
+  id: number;
+  type: "job";
+  by: string;
+  time: number;
+  title: string;
+  url?: string;
+  text?: string;
+}
+
+export interface HNPoll {
+  id: number;
+  type: "poll";
+  by: string;
+  time: number;
+  title: string;
+  text?: string;
+  score: number;
+  descendants?: number;
+  kids?: number[];
+  parts?: number[];
+}
+
 export interface HNComment {
   id: number;
   type: "comment";
@@ -49,7 +72,8 @@ export interface HNComment {
   kids?: number[];
 }
 
-export type HNFeedItem = HNStory | HNComment;
+/** Any displayable item in a column. */
+export type HNFeedItem = HNStory | HNJob | HNPoll | HNComment;
 
 export interface HNCommentNode {
   comment: HNComment;
@@ -62,7 +86,7 @@ export interface HNCommentPreview {
   total: number;
 }
 
-export type HNFeed = "top" | "new" | "ask" | "show" | "user" | "best-month" | "search" | "all";
+export type HNFeed = "top" | "new" | "ask" | "show" | "jobs" | "user" | "best-month" | "search" | "all";
 
 export interface HNFeedOptions {
   /** HN username for feed === "user". */
@@ -73,14 +97,13 @@ export interface HNFeedOptions {
   query?: string;
 }
 
-/** A non-story item — surfaced from /item but filtered out for the briefing. */
-interface HNNonStory {
+interface HNPollOpt {
   id: number;
-  type: "job" | "poll" | "pollopt";
+  type: "pollopt";
   [k: string]: unknown;
 }
 
-type HNAnyItem = HNFeedItem | HNNonStory;
+type HNAnyItem = HNFeedItem | HNPollOpt;
 
 const BASE = "https://hacker-news.firebaseio.com/v0";
 
@@ -157,7 +180,7 @@ export function clearHNCache(): void {
 
 /**
  * Fetch one item by id. Returns null if the item is not a story
- * (comment / job / poll) or is dead/deleted — those are not useful
+ * (comment / job / poll) or is dead/deleted. Those are not useful
  * for a story briefing.
  */
 export async function fetchItem(id: number, signal?: AbortSignal): Promise<HNFeedItem | null> {
@@ -219,7 +242,7 @@ export async function fetchTopStories(
 }
 
 /**
- * Result of one batch fetch — both the slice itself and the total
+ * Result of one batch fetch. Both the slice itself and the total
  * size of the upstream id list, so the caller can decide whether
  * there's more to load.
  */
@@ -292,7 +315,7 @@ async function fetchAllItemBatch(start: number, end: number, signal?: AbortSigna
   for (let id = max - clampedStart; id > max - clampedEnd && id > 0; id--) ids.push(id);
   const items = await Promise.all(ids.map((id) => fetchItem(id, signal)));
   return {
-    stories: items.filter((item): item is HNStory => item !== null && item.type === "story"),
+    stories: items.filter((item): item is HNFeedItem => item !== null && item.type !== "comment"),
     total: max,
     hasMore: clampedEnd < max,
   };
@@ -343,6 +366,7 @@ function feedEndpoint(feed: HNFeed): string {
     case "new": return "newstories";
     case "ask": return "askstories";
     case "show": return "showstories";
+    case "jobs": return "jobstories";
     case "user": return "user";
     case "best-month": return "beststories";
     case "search": return "search";
@@ -461,7 +485,7 @@ export function hnFromSiteUrl(host: string): string {
 // ─── Helpers ──────────────────────────────────────────────────────────
 
 function normalizeItem(raw: HNAnyItem | null): HNFeedItem | null {
-  return normalizeStory(raw) ?? normalizeComment(raw);
+  return normalizeStory(raw) ?? normalizeJob(raw) ?? normalizePoll(raw) ?? normalizeComment(raw);
 }
 
 function normalizeStory(raw: HNAnyItem | null): HNStory | null {
@@ -482,6 +506,45 @@ function normalizeStory(raw: HNAnyItem | null): HNStory | null {
     score: typeof r.score === "number" ? r.score : 0,
     descendants: typeof r.descendants === "number" ? r.descendants : 0,
     kids: Array.isArray(r.kids) ? r.kids : undefined,
+  };
+}
+
+function normalizeJob(raw: HNAnyItem | null): HNJob | null {
+  if (!raw || typeof raw !== "object") return null;
+  if (raw.type !== "job") return null;
+  if ("dead" in raw && raw.dead) return null;
+  if ("deleted" in raw && raw.deleted) return null;
+  const r = raw as unknown as HNJob;
+  if (typeof r.id !== "number" || typeof r.title !== "string") return null;
+  return {
+    id: r.id,
+    type: "job",
+    by: r.by ?? "unknown",
+    time: typeof r.time === "number" ? r.time : 0,
+    title: r.title,
+    url: typeof r.url === "string" ? r.url : undefined,
+    text: typeof r.text === "string" ? r.text : undefined,
+  };
+}
+
+function normalizePoll(raw: HNAnyItem | null): HNPoll | null {
+  if (!raw || typeof raw !== "object") return null;
+  if (raw.type !== "poll") return null;
+  if ("dead" in raw && raw.dead) return null;
+  if ("deleted" in raw && raw.deleted) return null;
+  const r = raw as unknown as HNPoll;
+  if (typeof r.id !== "number" || typeof r.title !== "string") return null;
+  return {
+    id: r.id,
+    type: "poll",
+    by: r.by ?? "unknown",
+    time: typeof r.time === "number" ? r.time : 0,
+    title: r.title,
+    text: typeof r.text === "string" ? r.text : undefined,
+    score: typeof r.score === "number" ? r.score : 0,
+    descendants: typeof r.descendants === "number" ? r.descendants : 0,
+    kids: Array.isArray(r.kids) ? r.kids : undefined,
+    parts: Array.isArray(r.parts) ? r.parts : undefined,
   };
 }
 

@@ -9,7 +9,7 @@
  *   - Stream prompts and yield chunks.
  *
  * The OT token (sampling parameters) is wired in <head> via meta tag,
- * not here — by the time this runs, Chrome has already accepted or
+ * not here. By the time this runs, Chrome has already accepted or
  * rejected it. We just attempt to set temperature/topK and silently
  * fall back if the API rejects them.
  */
@@ -30,7 +30,7 @@ function isLanguageModelDefined(): boolean {
 
 /**
  * Ask Chrome whether the model is ready, downloadable, or unsupported.
- * Pass the same options you'll later pass to `create()` — the docs
+ * Pass the same options you'll later pass to `create()`. The docs
  * stress this is critical for accurate availability reporting.
  */
 export async function checkAvailability(): Promise<ModelStatus> {
@@ -73,10 +73,10 @@ export async function checkAvailability(): Promise<ModelStatus> {
 
 /**
  * Create a session with optional sampling parameters. If the OT token
- * is missing/invalid, Chrome will reject `temperature`/`topK` — we
+ * is missing/invalid, Chrome will reject `temperature`/`topK`. We
  * detect that and retry without them.
  *
- * @param onProgress — fires during model download (0..1)
+ * @param onProgress fires during model download (0..1)
  */
 export async function createSession(
   systemPrompt: string,
@@ -117,7 +117,7 @@ export async function createSession(
 
 /**
  * Stream the model's response to a user prompt. Yields chunks as
- * strings — each chunk is whatever the model produced since the last
+ * strings. Each chunk is whatever the model produced since the last
  * yield, not necessarily a token-aligned slice.
  */
 export async function* streamPrompt(

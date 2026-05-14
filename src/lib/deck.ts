@@ -4,7 +4,7 @@
  * Each column has a `source` that says where stories come from
  * (top / new / ask / show / user / best-month / search / custom).
  *
- * Any column can carry an optional `instruction` — a plain-English
+ * Any column can carry an optional `instruction`, a plain-English
  * Nano filter applied one story at a time (T / F).  For "custom"
  * columns the instruction is required; for everything else it's
  * an optional additional filter on the feed.
@@ -18,6 +18,7 @@ export type ColumnSource =
   | "new"
   | "ask"
   | "show"
+  | "jobs"
   | "user"
   | "best-month"
   | "search"
@@ -69,7 +70,7 @@ const MAX_COLUMNS = 20;
 const MAX_TITLE_LEN = 120;
 const MAX_INSTRUCTION_LEN = 600;
 const VALID_SOURCES = new Set<string>([
-  "top", "new", "ask", "show", "user", "best-month", "search", "custom",
+  "top", "new", "ask", "show", "jobs", "user", "best-month", "search", "custom",
 ]);
 
 // ─── Validation ──────────────────────────────────────────────────────
