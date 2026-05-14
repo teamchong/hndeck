@@ -1,15 +1,5 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  // Worker name. Edit before first deploy if you want a different
-  // production URL prefix. The deployed site will live at
-  // `https://<name>.<your-cf-subdomain>.workers.dev`.
-  //
-  // Astro's @astrojs/cloudflare adapter (v13) auto-generates the rest
-  // of the wrangler config at build time (entrypoint, assets dir,
-  // KV/Images bindings) into dist/server/wrangler.json. We only
-  // override what we want to be explicit about: name, compat date/flags,
-  // and observability. Delete this file entirely if you accept all
-  // the adapter defaults.
   "name": "hndeck",
   "compatibility_date": "2025-09-01",
   "compatibility_flags": ["nodejs_compat"],
