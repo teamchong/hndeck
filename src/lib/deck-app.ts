@@ -269,7 +269,7 @@ function createDOMBaseline(): DOMBaseline {
 function readDOMSnapshot(): DOMSnapshot {
   return {
     documentAttributes: readAttributes(document.documentElement),
-    headHTML: document.head?.innerHTML ?? "",
+    headHTML: "", // never persist <head>; it has deploy-specific hashed assets
     bodyAttributes: readAttributes(document.body),
     bodyHTML: document.body?.innerHTML ?? "",
   };
@@ -286,10 +286,16 @@ function applyAttributes(el: Element, attrs: [string, string][]): void {
 }
 
 async function applyPersistedDOMSnapshot(): Promise<void> {
+  if (new URLSearchParams(window.location.search).has("reset")) {
+    await deletePersistedState();
+    window.history.replaceState(null, "", window.location.pathname);
+    window.location.reload();
+    return;
+  }
   const snapshot = await loadDOMSnapshot();
   if (!snapshot) return;
-  if (document.documentElement) applyAttributes(document.documentElement, snapshot.documentAttributes);
-  if (document.head) document.head.innerHTML = snapshot.headHTML;
+  // Never restore <head>. It contains build-specific hashed assets
+  // that change on every deploy. Let the fresh HTML provide them.
   if (document.body) {
     applyAttributes(document.body, snapshot.bodyAttributes);
     document.body.innerHTML = snapshot.bodyHTML;
