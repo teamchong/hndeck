@@ -945,7 +945,8 @@ function shouldScanMore(runtime: ColumnRuntime, added: number): boolean {
 function columnHasScrollableBacklog(runtime: ColumnRuntime): boolean {
   const cards = visibleCardCount(runtime);
   if (cards === 0) return false;
-  if (runtime.body.clientHeight <= 0) return cards >= 12;
+  // If body hasn't been laid out yet, keep loading.
+  if (runtime.body.clientHeight <= 0) return false;
   return runtime.body.scrollHeight > runtime.body.clientHeight + 80;
 }
 
