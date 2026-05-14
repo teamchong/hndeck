@@ -26,6 +26,17 @@ export function buildSourceFilterSystemPrompt(opts: SourceFilterPromptOptions): 
   if ("text" in item && item.text) aParts.push(`  <body>${esc(stripHtml(item.text).slice(0, 200))}</body>`);
 
   return [
+    "<example>",
+    "<A><title>Show HN: GPT-5 benchmark results</title></A>",
+    "<B>AI News</B>",
+    "YES",
+    "</example>",
+    "<example>",
+    "<A><title>Company lays off 500 employees</title></A>",
+    "<B>AI News</B>",
+    "NO",
+    "</example>",
+    "",
     "<A>",
     ...aParts,
     "</A>",
