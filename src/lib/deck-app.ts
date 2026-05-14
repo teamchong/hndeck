@@ -980,10 +980,14 @@ async function filterSingleItem(state: AppState, runtime: ColumnRuntime, item: H
     });
     const decision = parseBooleanFilterOutput(output);
     if (decision !== null) {
+      const title = "title" in item ? item.title : `item:${item.id}`;
+      console.log(`[filter] ${runtime.column.title} | ${title} | ${decision ? "YES" : "NO"} | ${output.trim()}`);
       setFilterDecision(state, key, decision);
       return;
     }
   }
+  const title = "title" in item ? item.title : `item:${item.id}`;
+  console.log(`[filter] ${runtime.column.title} | ${title} | FAIL | gave up after 3 attempts`);
   setFilterDecision(state, key, false);
 }
 
