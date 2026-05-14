@@ -190,7 +190,8 @@ export function guideContentFor(reason: GuideReason): GuideContent {
       return {
         title: "Built-in AI isn't enabled in this Chrome",
         intro:
-          "Chrome 138+ ships the Prompt API by default, but in some builds (older ChromeOS, enterprise-managed, or development) it's off. Enable two flags and restart Chrome.",
+          "Chrome 138+ ships the Prompt API by default, but in some builds (older ChromeOS, enterprise-managed, or development) it's off. Enable two flags and restart Chrome. " +
+          "If you're behind Cloudflare Zero Trust or another remote browser, Nano can't run there because the model needs to be on your local machine.",
         steps: [
           "Open <code>chrome://flags/#optimization-guide-on-device-model</code> in a new tab.",
           "Set the flag to <b>Enabled BypassPerfRequirement</b>.",
