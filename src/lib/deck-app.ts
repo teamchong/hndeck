@@ -971,13 +971,27 @@ async function filterSingleItem(state: AppState, runtime: ColumnRuntime, item: H
     });
     const decision = parseBooleanFilterOutput(output);
     if (decision !== null) {
-      state.sourceFilterDecisions.set(key, decision);
-      queuePersistFilterCache(state);
+      setFilterDecision(state, key, decision);
       return;
     }
   }
-  state.sourceFilterDecisions.set(key, false);
+  setFilterDecision(state, key, false);
+}
+
+function setFilterDecision(state: AppState, key: string, value: boolean): void {
+  state.sourceFilterDecisions.set(key, value);
+  evictFilterCache(state);
   queuePersistFilterCache(state);
+}
+
+function evictFilterCache(state: AppState): void {
+  if (state.sourceFilterDecisions.size <= FILTER_CACHE_MAX) return;
+  const excess = state.sourceFilterDecisions.size - FILTER_CACHE_MAX;
+  let i = 0;
+  for (const key of state.sourceFilterDecisions.keys()) {
+    if (i++ >= excess) break;
+    state.sourceFilterDecisions.delete(key);
+  }
 }
 
 function parseBooleanFilterOutput(output: string): boolean | null {
@@ -1342,10 +1356,9 @@ async function loadFilterCache(): Promise<Map<string, boolean>> {
     const raw = JSON.parse(await (await handle.getFile()).text()) as unknown;
     if (!raw || typeof raw !== "object") return new Map();
     const entries = Object.entries(raw as Record<string, boolean>)
-      .filter(([k, v]) => typeof v === "boolean" && k.startsWith(SOURCE_FILTER_CACHE_VERSION));
-    // Keep only the last FILTER_CACHE_MAX entries (newest at end since Map preserves insertion order).
-    const trimmed = entries.length > FILTER_CACHE_MAX ? entries.slice(-FILTER_CACHE_MAX) : entries;
-    return new Map(trimmed);
+      .filter(([k, v]) => typeof v === "boolean" && k.startsWith(SOURCE_FILTER_CACHE_VERSION))
+      .slice(-FILTER_CACHE_MAX);
+    return new Map(entries);
   } catch {
     return new Map();
   }
@@ -1362,15 +1375,6 @@ function queuePersistFilterCache(state: AppState): void {
 async function persistFilterCacheNow(state: AppState): Promise<void> {
   const root = await getOPFSRoot();
   if (!root) return;
-  // Evict oldest entries if over limit.
-  if (state.sourceFilterDecisions.size > FILTER_CACHE_MAX) {
-    const excess = state.sourceFilterDecisions.size - FILTER_CACHE_MAX;
-    let i = 0;
-    for (const key of state.sourceFilterDecisions.keys()) {
-      if (i++ >= excess) break;
-      state.sourceFilterDecisions.delete(key);
-    }
-  }
   const obj: Record<string, boolean> = {};
   for (const [k, v] of state.sourceFilterDecisions) obj[k] = v;
   const handle = await root.getFileHandle(OPFS_FILTER_CACHE_FILE, { create: true });
